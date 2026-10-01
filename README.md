@@ -59,12 +59,14 @@ curl -fsSL https://raw.githubusercontent.com/didacg/duck-lang/main/install.sh | 
 ```
 
 The script clones the repository into a temporary directory, builds `duckc`
-and installs it. Options:
+and installs it **together with the editor extension** (syntax highlighting
+for `.duck` files in VS Code, VSCodium and Cursor). Options:
 
 ```sh
 sh install.sh --user         # install into ~/.local/bin (no root needed)
 sh install.sh --prefix DIR   # install into DIR/bin
-sh install.sh --uninstall    # remove it again
+sh install.sh --no-editor    # compiler only, skip the editor extension
+sh install.sh --uninstall    # remove both again
 ```
 
 ### From a checkout
@@ -73,17 +75,21 @@ sh install.sh --uninstall    # remove it again
 git clone https://github.com/didacg/duck-lang.git
 cd duck-lang
 make
-sudo make install            # -> /usr/local/bin/duckc
+sudo make install            # -> /usr/local/bin/duckc + editor extension
 # or: ./install.sh --user
 ```
+
+Under `sudo` the extension is still installed into the *invoking* user's
+editor directory, not root's. `sudo make uninstall` removes both.
 
 The installer needs `make`, a C compiler, binutils (`as`, `ld`) and `git` for
 the one-liner. Linux x86-64 only.
 
 ## Editors
 
-A VS Code extension is included, giving `.duck` files syntax highlighting,
-comment toggling and block indentation in **VS Code, VSCodium and Cursor**:
+The main installer (`install.sh`, `sudo make install`, the curl one-liner)
+installs this extension along with the compiler — skip it with
+`--no-editor`. To manage it on its own:
 
 ```sh
 make install-vscode      # copies it into every editor found

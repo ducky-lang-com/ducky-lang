@@ -21,7 +21,7 @@ compiler built from scratch.
 | T5 | `duckc` CLI: `-o`, `-S/--emit-asm`, `--dump-tokens`, `--version`, `--help` | done |
 | T6 | Freestanding output: `_start`, raw `write`/`exit` syscalls, no libc | done |
 | T7 | Error reporting with `file:line:col`, source excerpt and caret | done |
-| T8 | Installer: `install.sh` (one-liner via curl, `--user`/`--prefix`/`--uninstall`) and `make install` | done |
+| T8 | Installer: `install.sh` (one-liner via curl, `--user`/`--prefix`/`--no-editor`/`--uninstall`) that installs the compiler **and** the editor extension; `make install`/`uninstall` do the same | done |
 
 ### Language
 

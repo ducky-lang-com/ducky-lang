@@ -2,10 +2,11 @@
 # install.sh - installer for the Duck language compiler (duckc).
 #
 # Usage:
-#   sh install.sh                build and install into the default prefix
+#   sh install.sh                build and install compiler + editor extension
 #   sh install.sh --prefix DIR   install into DIR/bin
 #   sh install.sh --user         install into $HOME/.local (no root needed)
-#   sh install.sh --uninstall    remove the installed compiler
+#   sh install.sh --no-editor    skip the VS Code/VSCodium/Cursor extension
+#   sh install.sh --uninstall    remove the compiler and the editor extension
 #   sh install.sh --help         show this help
 #
 # One-liner (clones the repository, builds and installs):
@@ -24,8 +25,13 @@ install.sh - installs the Duck language compiler (duckc)
 Options:
   --prefix DIR   install into DIR/bin (default: /usr/local)
   --user         install into $HOME/.local (no root required)
-  --uninstall    remove the compiler installed in the prefix
+  --no-editor    do not install the VS Code/VSCodium/Cursor extension
+  --uninstall    remove the compiler and the editor extension
   -h, --help     show this help
+
+Along with the compiler, the script installs the Duck editor extension
+(syntax highlighting for .duck files) into every VS Code-compatible editor
+found in your home directory. Use --no-editor to skip it.
 
 Without a checkout of the repository, the script clones it into a temporary
 directory, builds it and installs the resulting binary.
@@ -34,6 +40,7 @@ EOF
 
 PREFIX=""
 UNINSTALL=0
+EDITOR_EXT=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,6 +51,10 @@ while [ $# -gt 0 ]; do
             ;;
         --user)
             PREFIX="$USER_PREFIX"
+            shift
+            ;;
+        --no-editor)
+            EDITOR_EXT=0
             shift
             ;;
         --uninstall)
@@ -64,6 +75,13 @@ done
 
 # ---------------------------------------------------------------- uninstall
 if [ "$UNINSTALL" -eq 1 ]; then
+    # When run through sudo, target the invoking user's editor directories.
+    EXT_HOME="$HOME"
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+        su_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+        if [ -n "$su_home" ]; then EXT_HOME="$su_home"; fi
+    fi
+
     removed=0
     if [ -n "$PREFIX" ]; then
         if rm -f "$PREFIX/bin/$BIN_NAME"; then
@@ -80,6 +98,23 @@ if [ "$UNINSTALL" -eq 1 ]; then
         done
     fi
     [ "$removed" -eq 1 ] || echo "$BIN_NAME is not installed"
+
+    if [ "$EDITOR_EXT" -eq 1 ]; then
+        for ed in \
+            "$EXT_HOME/.vscode/extensions" \
+            "$EXT_HOME/.vscode-oss/extensions" \
+            "$EXT_HOME/.cursor/extensions" \
+            "$EXT_HOME/.vscode-server/extensions" \
+            "$EXT_HOME/.vscode-server-insiders/extensions"
+        do
+            for ext in "$ed"/duck-lang-*; do
+                if [ -d "$ext" ]; then
+                    rm -rf "$ext"
+                    echo "removed $ext"
+                fi
+            done
+        done
+    fi
     exit 0
 fi
 
@@ -144,6 +179,18 @@ fi
 echo
 echo "==> $BIN_NAME installed:"
 "$PREFIX/bin/$BIN_NAME" --version
+
+# --------------------------------------------------------- editor extension
+if [ "$EDITOR_EXT" -eq 1 ]; then
+    if [ -f "$SOURCE_DIR/editors/vscode/install.sh" ]; then
+        echo "==> installing the editor extension (.duck syntax highlighting)"
+        if ! sh "$SOURCE_DIR/editors/vscode/install.sh" --optional; then
+            echo "install.sh: warning: the editor extension was not installed" >&2
+        fi
+    fi
+else
+    echo "==> editor extension skipped (--no-editor)"
+fi
 
 case ":$PATH:" in
     *":$PREFIX/bin:"*) ;;

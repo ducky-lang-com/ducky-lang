@@ -24,14 +24,18 @@ test: $(BIN)
 PREFIX ?= /usr/local
 BINDIR := $(DESTDIR)$(PREFIX)/bin
 
+# The compiler and the editor extension travel together: by default the
+# script also installs syntax highlighting for .duck files.
 install: $(BIN)
 	install -d $(BINDIR)
 	install -m 755 $(BIN) $(BINDIR)/$(BIN)
 	@echo "installed $(BINDIR)/$(BIN)"
+	@sh editors/vscode/install.sh --optional
 
 uninstall:
 	rm -f $(BINDIR)/$(BIN)
 	@echo "removed $(BINDIR)/$(BIN)"
+	@sh editors/vscode/install.sh --uninstall --optional
 
 # Syntax highlighting for .duck files in VS Code / VSCodium / Cursor.
 install-vscode:

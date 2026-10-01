@@ -10,9 +10,16 @@ language (`.duck` files).
 * `//` and `/* */` commenting (`Shift+Alt+A`), auto-closing brackets and
   quotes, block indentation.
 
-## Install from this repository
+## Install
 
-From the repository root:
+The extension is installed automatically with the language itself:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/didacg/duck-lang/main/install.sh | sh
+# (or: sh install.sh / sudo make install from a checkout)
+```
+
+To manage only the extension, from the repository root:
 
 ```sh
 make install-vscode

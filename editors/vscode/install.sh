@@ -5,7 +5,9 @@
 #
 # Usage:
 #   sh install.sh                install into every editor found
+#   sh install.sh --optional     do not fail when no editor is installed
 #   sh install.sh --uninstall    remove it again
+#   sh install.sh --uninstall --optional
 set -eu
 
 SRC_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -13,26 +15,37 @@ VERSION="$(grep -m1 '"version"' "$SRC_DIR/package.json" | sed 's/.*: *"\([^"]*\)
 EXT_NAME="duck-lang-$VERSION"
 
 UNINSTALL=0
-case "${1:-}" in
-    --uninstall) UNINSTALL=1 ;;
-    -h|--help)
-        echo "usage: sh install.sh [--uninstall]"
-        exit 0
-        ;;
-    "") ;;
-    *)
-        echo "install.sh: error: unknown option '$1'" >&2
-        exit 1
-        ;;
-esac
+OPTIONAL=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --uninstall) UNINSTALL=1; shift ;;
+        --optional)  OPTIONAL=1;  shift ;;
+        -h|--help)
+            echo "usage: sh install.sh [--uninstall] [--optional]"
+            exit 0
+            ;;
+        *)
+            echo "install.sh: error: unknown option '$1'" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# When run through sudo, target the invoking user's editor directories.
+EXT_HOME="$HOME"
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    su_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    if [ -n "$su_home" ]; then EXT_HOME="$su_home"; fi
+fi
 
 DIRS=""
 for d in \
-    "$HOME/.vscode/extensions" \
-    "$HOME/.vscode-oss/extensions" \
-    "$HOME/.cursor/extensions" \
-    "$HOME/.vscode-server/extensions" \
-    "$HOME/.vscode-server-insiders/extensions"
+    "$EXT_HOME/.vscode/extensions" \
+    "$EXT_HOME/.vscode-oss/extensions" \
+    "$EXT_HOME/.cursor/extensions" \
+    "$EXT_HOME/.vscode-server/extensions" \
+    "$EXT_HOME/.vscode-server-insiders/extensions"
 do
     if [ -d "$d" ]; then
         DIRS="$DIRS $d"
@@ -40,6 +53,11 @@ do
 done
 
 if [ -z "$DIRS" ]; then
+    if [ "$OPTIONAL" -eq 1 ]; then
+        echo "==> no VS Code-compatible editor found, extension not installed"
+        echo "    install it later with: make install-vscode"
+        exit 0
+    fi
     echo "install.sh: error: no VS Code-compatible extensions directory found" >&2
     echo "install.sh: expected one of ~/.vscode/extensions, ~/.vscode-oss/extensions, ~/.cursor/extensions" >&2
     exit 1
