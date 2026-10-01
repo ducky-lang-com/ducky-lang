@@ -1,0 +1,10 @@
+fn f(x: int) -> int {
+    if x > 0 {
+        return 1;
+    }
+}
+
+fn main() -> int {
+    serve(f(1));
+    return 0;
+}

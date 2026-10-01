@@ -1,0 +1,8 @@
+fn nothing() {
+    serve("nothing");
+}
+
+fn main() -> int {
+    let v = nothing();
+    return 0;
+}

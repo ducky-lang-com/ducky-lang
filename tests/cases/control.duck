@@ -1,0 +1,40 @@
+// control.duck - if / else if / else and while loops.
+fn main() -> int {
+    let x = 10;
+    if x > 5 {
+        serve("big");
+    } else {
+        serve("small");
+    }
+
+    if x == 10 {
+        serve("ten");
+    } else if x == 9 {
+        serve("nine");
+    } else {
+        serve("other");
+    }
+
+    let i = 0;
+    let sum = 0;
+    while i < 5 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    serve(sum);
+
+    while false {
+        serve("never");
+    }
+
+    if !false {
+        serve("not false");
+    }
+
+    if true {
+        if x == 10 {
+            serve("nested");
+        }
+    }
+    return 0;
+}

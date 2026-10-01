@@ -1,0 +1,6 @@
+# build artifacts
+*.o
+duckc
+build/
+*.s
+*.out

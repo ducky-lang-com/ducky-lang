@@ -1,0 +1,45 @@
+# Makefile - build the Duck language compiler (duckc).
+
+CC      ?= cc
+CFLAGS  ?= -std=c11 -O2 -Wall -Wextra
+LDFLAGS ?=
+
+SRC := src/common.c src/lexer.c src/parser.c src/sema.c src/codegen.c src/main.c
+OBJ := $(SRC:.c=.o)
+BIN := duckc
+
+.PHONY: all clean test examples install uninstall
+
+all: $(BIN)
+
+$(BIN): $(OBJ)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJ)
+
+src/%.o: src/%.c $(wildcard src/*.h)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+test: $(BIN)
+	@bash tests/run_tests.sh
+
+PREFIX ?= /usr/local
+BINDIR := $(DESTDIR)$(PREFIX)/bin
+
+install: $(BIN)
+	install -d $(BINDIR)
+	install -m 755 $(BIN) $(BINDIR)/$(BIN)
+	@echo "installed $(BINDIR)/$(BIN)"
+
+uninstall:
+	rm -f $(BINDIR)/$(BIN)
+	@echo "removed $(BINDIR)/$(BIN)"
+
+examples: $(BIN)
+	@mkdir -p build
+	@for f in examples/*.duck; do \
+		echo "  duckc $$f"; \
+		./$(BIN) "$$f" -o "build/$$(basename $$f .duck)" || exit 1; \
+	done
+
+clean:
+	rm -f $(OBJ) $(BIN)
+	rm -rf build

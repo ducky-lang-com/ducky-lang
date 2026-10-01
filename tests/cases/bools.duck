@@ -1,0 +1,23 @@
+// bools.duck - boolean values, logic operators and short-circuiting.
+fn main() -> int {
+    let yes = true;
+    let no = false;
+
+    serve(yes);
+    serve(no);
+    serve(yes && no);
+    serve(yes || no);
+    serve(!no);
+    serve(1 < 2);
+    serve(2 <= 2);
+    serve(3 > 4);
+    serve(5 >= 5);
+    serve(1 == 1 && 2 == 2);
+    serve((1 == 2) || (3 == 3));
+
+    // The right-hand side must not run here: it divides by zero.
+    let zero = 0;
+    serve(yes || 10 / zero > 1);
+    serve(no && 10 / zero > 1);
+    return 0;
+}

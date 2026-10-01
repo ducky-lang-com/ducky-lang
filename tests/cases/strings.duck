@@ -1,0 +1,16 @@
+// strings.duck - literals, escapes and value comparison.
+fn main() -> int {
+    serve("hello");
+    serve("with\ttab");
+    serve("quote: \"duck\"");
+    serve("line1\nline2");
+
+    let a = "duck";
+    let b = "duck";
+    let c = "goose";
+    serve(a == b);
+    serve(a == c);
+    serve(a != c);
+    serve(a == "duck");
+    return 0;
+}

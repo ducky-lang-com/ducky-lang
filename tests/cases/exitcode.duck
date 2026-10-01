@@ -1,0 +1,5 @@
+// exitcode.duck - main's return value becomes the process exit status.
+fn main() -> int {
+    serve("about to exit");
+    return 42;
+}

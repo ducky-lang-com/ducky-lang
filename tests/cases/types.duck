@@ -1,0 +1,17 @@
+// types.duck - explicit annotations and inferred types.
+fn main() -> int {
+    let a: int = 5;
+    let b: bool = true;
+    let c: string = "duck";
+    let d = 6;
+    let e = false;
+
+    serve(a);
+    serve(b);
+    serve(c);
+    serve(d);
+    serve(e);
+    serve(-a);
+    serve(!b);
+    return 0;
+}

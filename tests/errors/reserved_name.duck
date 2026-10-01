@@ -1,0 +1,7 @@
+fn _internal() {
+    serve("x");
+}
+
+fn main() -> int {
+    return 0;
+}
