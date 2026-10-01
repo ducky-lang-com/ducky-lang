@@ -1,0 +1,39 @@
+{
+  "name": "duck-lang",
+  "displayName": "Duck",
+  "description": "Syntax highlighting and language support for the Duck programming language (duck-lang)",
+  "version": "0.1.0",
+  "publisher": "didacg",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "duck",
+    "duck-lang",
+    "duckc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/didacg/duck-lang.git"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "duck",
+        "aliases": ["Duck", "duck-lang"],
+        "extensions": [".duck"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "duck",
+        "scopeName": "source.duck",
+        "path": "./syntaxes/duck.tmLanguage.json"
+      }
+    ]
+  }
+}

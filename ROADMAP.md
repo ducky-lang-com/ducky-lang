@@ -49,6 +49,7 @@ compiler built from scratch.
 | Q3 | Coverage of: precedence, division/modulo signs, short-circuit (no side effect), >6-argument ABI, deep + mutual recursion, scopes, exit codes | done |
 | Q4 | Example programs that compile out of the box (`make examples`) | done |
 | Q5 | README + full language specification | done |
+| Q6 | Editor support: VS Code/VSCodium/Cursor extension (TextMate grammar + language configuration), validated with the real TextMate engine | done |
 
 **Test count: 22 (10 runtime + 12 error), all passing.**
 
@@ -68,6 +69,7 @@ compiler built from scratch.
 | N8 | `break` / `continue` | |
 | N9 | Global constants (`const`) | |
 | N10 | Better errors: multiple errors per run instead of fail-fast | recovery in parser + sema |
+| N11 | Publish the extension to Open VSX and the VS Code Marketplace | needs a publisher account |
 
 ## Milestone M2 — Engineering
 

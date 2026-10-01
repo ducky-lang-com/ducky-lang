@@ -1,0 +1,44 @@
+# Duck for VS Code / VSCodium / Cursor
+
+Syntax highlighting and language support for the **Duck** programming
+language (`.duck` files).
+
+* syntax highlighting: comments, strings and escapes, decimal/hex numbers,
+  keywords (`fn`, `let`, `if`, `else`, `while`, `return`), types
+  (`int`, `bool`, `string`), `true`/`false`, function definitions and calls,
+  the `serve()` builtin, operators;
+* `//` and `/* */` commenting (`Shift+Alt+A`), auto-closing brackets and
+  quotes, block indentation.
+
+## Install from this repository
+
+From the repository root:
+
+```sh
+make install-vscode
+```
+
+or directly:
+
+```sh
+sh editors/vscode/install.sh
+```
+
+The script copies the extension into every VS Code-compatible extensions
+directory it finds (`~/.vscode`, `~/.vscode-oss` (VSCodium), `~/.cursor`,
+`~/.vscode-server`). Then run **Developer: Reload Window** (or restart the
+editor).
+
+## Uninstall
+
+```sh
+sh editors/vscode/install.sh --uninstall
+```
+
+## Manual install
+
+Copy this folder to `<extensions-dir>/duck-lang-0.1.0`, e.g.
+
+```sh
+cp -r editors/vscode ~/.vscode-oss/extensions/duck-lang-0.1.0
+```

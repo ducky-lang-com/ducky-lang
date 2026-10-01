@@ -80,6 +80,20 @@ sudo make install            # -> /usr/local/bin/duckc
 The installer needs `make`, a C compiler, binutils (`as`, `ld`) and `git` for
 the one-liner. Linux x86-64 only.
 
+## Editors
+
+A VS Code extension is included, giving `.duck` files syntax highlighting,
+comment toggling and block indentation in **VS Code, VSCodium and Cursor**:
+
+```sh
+make install-vscode      # copies it into every editor found
+make uninstall-vscode
+```
+
+Then run **Developer: Reload Window** (or restart the editor). It lives in
+[`editors/vscode/`](editors/vscode/) and can also be installed by hand — see
+its README. It is not published on the Marketplace / Open VSX yet.
+
 ## Building
 
 Requirements: a C11 compiler, GNU make, GNU `as` and `ld` (binutils), Linux
@@ -139,6 +153,8 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
 duck-lang/
 ├── Makefile           build, test, examples and install targets
 ├── install.sh         standalone installer (curl | sh friendly)
+├── editors/
+│   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
 ├── SPEC.md            language specification v0.1.0
 ├── ROADMAP.md         requirements: delivered and planned

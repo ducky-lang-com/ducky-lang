@@ -8,7 +8,7 @@ SRC := src/common.c src/lexer.c src/parser.c src/sema.c src/codegen.c src/main.c
 OBJ := $(SRC:.c=.o)
 BIN := duckc
 
-.PHONY: all clean test examples install uninstall
+.PHONY: all clean test examples install uninstall install-vscode uninstall-vscode
 
 all: $(BIN)
 
@@ -32,6 +32,13 @@ install: $(BIN)
 uninstall:
 	rm -f $(BINDIR)/$(BIN)
 	@echo "removed $(BINDIR)/$(BIN)"
+
+# Syntax highlighting for .duck files in VS Code / VSCodium / Cursor.
+install-vscode:
+	@sh editors/vscode/install.sh
+
+uninstall-vscode:
+	@sh editors/vscode/install.sh --uninstall
 
 examples: $(BIN)
 	@mkdir -p build
