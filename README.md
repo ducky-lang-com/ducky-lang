@@ -1,6 +1,6 @@
 # Duck (duck-lang)
 
-![Duck logo: a red-orange D](editors/vscode/assets/icon.svg)
+![Duck logo: an amber monoline D](editors/vscode/assets/icon.svg)
 
 A small, statically typed programming language that **compiles to native
 x86-64 machine code**. The compiler (`duckc`) is written in C11, emits AT&T
@@ -87,6 +87,29 @@ editor directory, not root's. `sudo make uninstall` removes both.
 The installer needs `make`, a C compiler, binutils (`as`, `ld`) and `git` for
 the one-liner. Linux x86-64 only.
 
+### Updating
+
+```sh
+duck-update                # update Duck in place (installed with the compiler)
+duck-update --check        # report whether a newer version exists
+sh update.sh               # from a checkout: git pull + rebuild + reinstall
+```
+
+Or from anywhere, without a checkout:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/didacg/duck-lang/main/update.sh | sh
+```
+
+From a checkout the script fast-forwards your sources (`git pull
+--ff-only`) and reinstalls them — your commits are never overwritten, and a
+dirty tree makes it stop instead of clobbering your work. Anywhere else it
+downloads the latest sources into a temporary directory. Options (`--user`,
+`--prefix DIR`, `--no-editor`) are forwarded to `install.sh`, and
+`make update PREFIX=...` does the same. `--check` compares the commit
+recorded at install time (`$PREFIX/share/duck-lang/commit`) with
+`origin/main` and changes nothing.
+
 ## Editors
 
 The main installer (`install.sh`, `sudo make install`, the curl one-liner)
@@ -161,6 +184,7 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
 duck-lang/
 ├── Makefile           build, test, examples and install targets
 ├── install.sh         standalone installer (curl | sh friendly)
+├── update.sh          updater, installed as `duck-update` (curl | sh friendly)
 ├── editors/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file

@@ -1,6 +1,6 @@
 # Duck for VS Code / VSCodium / Cursor
 
-![Duck logo: a red-orange D](assets/icon.svg)
+![Duck logo: an amber monoline D](assets/icon.svg)
 
 Syntax highlighting and language support for the **Duck** programming
 language (`.duck` files).

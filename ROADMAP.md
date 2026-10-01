@@ -22,6 +22,7 @@ compiler built from scratch.
 | T6 | Freestanding output: `_start`, raw `write`/`exit` syscalls, no libc | done |
 | T7 | Error reporting with `file:line:col`, source excerpt and caret | done |
 | T8 | Installer: `install.sh` (one-liner via curl, `--user`/`--prefix`/`--no-editor`/`--uninstall`) that installs the compiler **and** the editor extension; `make install`/`uninstall` do the same | done |
+| T9 | Updater: `update.sh`, installed as the `duck-update` command (`--check` compares the stamped commit with `origin/main`, `git pull --ff-only` from a checkout, curl-able from anywhere); `make update` | done |
 
 ### Language
 
@@ -90,3 +91,27 @@ compiler built from scratch.
 | A1 | Direct machine-code emission (own ELF writer, no `as`/`ld`) | |
 | A2 | Self-hosting: rewrite `duckc` in Duck | needs A1… and M1 features |
 | A3 | Package manager and standard library | |
+
+## Milestone M4 — Bare metal: a Duck kernel
+
+*Could an operating system be written in Duck?* The foundation already
+points that way: `duckc` emits **freestanding** x86-64 binaries (`_start`,
+raw syscalls, no libc at all) and owns its own backend, so it does not need
+an OS to target a bare machine. What is missing is everything that talks to
+hardware directly:
+
+| # | Requirement | Why a kernel needs it |
+|---|---|---|
+| B1 | Global/static variables at known addresses | kernel state, IDT/GDT, buffers |
+| B2 | Bitwise operators `&` `\|` `^` `~` `<<` `>>` | registers, flags, masks |
+| B3 | Pointers, address-of and volatile-correct access | MMIO: VGA text at `0xB8000`, APIC, UART |
+| B4 | Structs (builds on N7) | descriptor tables, interrupt frames |
+| B5 | Intrinsics or inline assembly: `in`, `out`, `cli`, `sti`, `hlt` | port I/O, interrupt control |
+| B6 | Linker script + multiboot2 header, a `duckc --freestanding` target flag | GRUB loads the kernel where it must live |
+| B7 | Demo kernel: VGA text “Hello from Duck” booting in QEMU | proves the whole pipeline end to end |
+| B8 | Interrupt handling: IDT, ISRs, PIT timer, keyboard input | a kernel that reacts to the world |
+
+With B1–B8 the same compiler that builds programs for Linux today could
+build a small teaching/hobby kernel (xv6 / Rust-tutorial league): a real OS
+that boots, though deliberately not a production one — no drivers,
+networking or MMU policy.

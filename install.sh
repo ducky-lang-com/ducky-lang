@@ -31,7 +31,8 @@ Options:
 
 Along with the compiler, the script installs the Duck editor extension
 (syntax highlighting for .duck files) into every VS Code-compatible editor
-found in your home directory. Use --no-editor to skip it.
+found in your home directory. Use --no-editor to skip it. It also installs
+update.sh as 'duck-update', the command used to update Duck later.
 
 Without a checkout of the repository, the script clones it into a temporary
 directory, builds it and installs the resulting binary.
@@ -83,18 +84,29 @@ if [ "$UNINSTALL" -eq 1 ]; then
     fi
 
     removed=0
-    if [ -n "$PREFIX" ]; then
-        if rm -f "$PREFIX/bin/$BIN_NAME"; then
-            echo "removed $PREFIX/bin/$BIN_NAME"
+    remove_file() {
+        if [ -e "$1" ]; then
+            rm -f "$1"
+            echo "removed $1"
             removed=1
         fi
+    }
+    remove_tree() {
+        if [ -d "$1" ]; then
+            rm -rf "$1"
+            echo "removed $1"
+            removed=1
+        fi
+    }
+    if [ -n "$PREFIX" ]; then
+        remove_file "$PREFIX/bin/$BIN_NAME"
+        remove_file "$PREFIX/bin/duck-update"
+        remove_tree "$PREFIX/share/duck-lang"
     else
         for dir in "$DEFAULT_PREFIX" "$USER_PREFIX"; do
-            if [ -e "$dir/bin/$BIN_NAME" ]; then
-                rm -f "$dir/bin/$BIN_NAME"
-                echo "removed $dir/bin/$BIN_NAME"
-                removed=1
-            fi
+            remove_file "$dir/bin/$BIN_NAME"
+            remove_file "$dir/bin/duck-update"
+            remove_tree "$dir/share/duck-lang"
         done
     fi
     [ "$removed" -eq 1 ] || echo "$BIN_NAME is not installed"
@@ -175,6 +187,26 @@ else
     cp "$SOURCE_DIR/$BIN_NAME" "$PREFIX/bin/$BIN_NAME"
     chmod 0755 "$PREFIX/bin/$BIN_NAME"
 fi
+
+# Ship the updater as a command so Duck can be updated later from anywhere.
+if [ -f "$SOURCE_DIR/update.sh" ]; then
+    if command -v install >/dev/null 2>&1; then
+        install -m 0755 "$SOURCE_DIR/update.sh" "$PREFIX/bin/duck-update"
+    else
+        cp "$SOURCE_DIR/update.sh" "$PREFIX/bin/duck-update"
+        chmod 0755 "$PREFIX/bin/duck-update"
+    fi
+    echo "installed $PREFIX/bin/duck-update (run 'duck-update' to update Duck)"
+fi
+
+# Stamp the commit that was built so 'duck-update --check' can compare it
+# with the tip of origin/main.
+DUCK_COMMIT="unknown"
+if [ -d "$SOURCE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    DUCK_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+fi
+mkdir -p "$PREFIX/share/duck-lang"
+echo "$DUCK_COMMIT" > "$PREFIX/share/duck-lang/commit"
 
 echo
 echo "==> $BIN_NAME installed:"

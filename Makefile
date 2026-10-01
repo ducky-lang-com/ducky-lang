@@ -8,7 +8,7 @@ SRC := src/common.c src/lexer.c src/parser.c src/sema.c src/codegen.c src/main.c
 OBJ := $(SRC:.c=.o)
 BIN := duckc
 
-.PHONY: all clean test examples install uninstall install-vscode uninstall-vscode
+.PHONY: all clean test examples install uninstall install-vscode uninstall-vscode update
 
 all: $(BIN)
 
@@ -24,18 +24,30 @@ test: $(BIN)
 PREFIX ?= /usr/local
 BINDIR := $(DESTDIR)$(PREFIX)/bin
 
-# The compiler and the editor extension travel together: by default the
-# script also installs syntax highlighting for .duck files.
+# The compiler, the updater and the editor extension travel together:
+# by default this also installs syntax highlighting for .duck files.
 install: $(BIN)
 	install -d $(BINDIR)
 	install -m 755 $(BIN) $(BINDIR)/$(BIN)
 	@echo "installed $(BINDIR)/$(BIN)"
+	@if [ -f update.sh ]; then \
+		install -m 755 update.sh $(BINDIR)/duck-update; \
+		echo "installed $(BINDIR)/duck-update"; \
+	fi
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/duck-lang
+	@git rev-parse HEAD > $(DESTDIR)$(PREFIX)/share/duck-lang/commit 2>/dev/null \
+		|| echo unknown > $(DESTDIR)$(PREFIX)/share/duck-lang/commit
 	@sh editors/vscode/install.sh --optional
 
 uninstall:
-	rm -f $(BINDIR)/$(BIN)
-	@echo "removed $(BINDIR)/$(BIN)"
+	rm -f $(BINDIR)/$(BIN) $(BINDIR)/duck-update
+	@echo "removed $(BINDIR)/$(BIN) and $(BINDIR)/duck-update (if present)"
+	rm -rf $(DESTDIR)$(PREFIX)/share/duck-lang
 	@sh editors/vscode/install.sh --uninstall --optional
+
+# Update Duck from origin/main and reinstall (forwards PREFIX and friends).
+update:
+	@sh update.sh --prefix $(PREFIX)
 
 # Syntax highlighting for .duck files in VS Code / VSCodium / Cursor.
 install-vscode:
