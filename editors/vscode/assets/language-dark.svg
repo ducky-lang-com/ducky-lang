@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Duck file icon (dark backgrounds)">
+  <title>Duck file icon - dark theme variant</title>
+  <defs>
+    <linearGradient id="duckGradientDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#FFC107"/>
+      <stop offset="100%" stop-color="#FF6F00"/>
+    </linearGradient>
+  </defs>
+  <path fill="none"
+        stroke="url(#duckGradientDark)"
+        stroke-width="14"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M 20 116
+           C 30 114 34 110 34 104
+           L 34 36
+           C 34 28 38 24 46 24
+           L 62 24
+           C 92 24 106 42 106 64
+           C 106 86 92 104 62 104
+           L 44 104"/>
+</svg>

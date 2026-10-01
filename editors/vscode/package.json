@@ -2,7 +2,7 @@
   "name": "duck-lang",
   "displayName": "Duck",
   "description": "Syntax highlighting and language support for the Duck programming language (duck-lang)",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "didacg",
   "icon": "assets/icon.png",
   "engines": {
@@ -26,7 +26,11 @@
         "id": "duck",
         "aliases": ["Duck", "duck-lang"],
         "extensions": [".duck"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "dark": "./assets/language-dark.png",
+          "light": "./assets/language-light.png"
+        }
       }
     ],
     "grammars": [
