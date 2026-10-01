@@ -70,6 +70,7 @@ compiler built from scratch.
 | N9 | Global constants (`const`) | |
 | N10 | Better errors: multiple errors per run instead of fail-fast | recovery in parser + sema |
 | N11 | Publish the extension to Open VSX and the VS Code Marketplace | needs a publisher account |
+| N12 | File icon for `.duck` files in the explorer (bundled icon theme; requires the user to select it, so it must not replace their theme wholesale) | |
 
 ## Milestone M2 — Engineering
 

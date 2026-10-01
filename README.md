@@ -1,5 +1,7 @@
 # Duck (duck-lang)
 
+![Duck logo: a red-orange D](editors/vscode/assets/icon.svg)
+
 A small, statically typed programming language that **compiles to native
 x86-64 machine code**. The compiler (`duckc`) is written in C11, emits AT&T
 assembly, and hands it to the system assembler (`as`) and linker (`ld`). The

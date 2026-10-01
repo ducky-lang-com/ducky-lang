@@ -66,19 +66,34 @@ fi
 for dir in $DIRS; do
     target="$dir/$EXT_NAME"
     if [ "$UNINSTALL" -eq 1 ]; then
-        if [ -d "$target" ]; then
-            rm -rf "$target"
-            echo "removed $target"
-        else
+        found=0
+        for old in "$dir"/duck-lang-*; do
+            if [ -d "$old" ]; then
+                rm -rf "$old"
+                echo "removed $old"
+                found=1
+            fi
+        done
+        if [ "$found" -eq 0 ]; then
             echo "not installed in $dir"
         fi
     else
+        # Drop any previously installed version so only one copy is loaded.
+        for old in "$dir"/duck-lang-*; do
+            if [ -d "$old" ] && [ "$old" != "$target" ]; then
+                rm -rf "$old"
+                echo "removed old $old"
+            fi
+        done
         rm -rf "$target"
-        mkdir -p "$target/syntaxes"
+        mkdir -p "$target/syntaxes" "$target/assets"
         cp "$SRC_DIR/package.json" "$target/"
         cp "$SRC_DIR/language-configuration.json" "$target/"
         cp "$SRC_DIR/README.md" "$target/"
         cp "$SRC_DIR/syntaxes/duck.tmLanguage.json" "$target/syntaxes/"
+        if [ -d "$SRC_DIR/assets" ]; then
+            cp "$SRC_DIR"/assets/* "$target/assets/"
+        fi
         echo "installed $EXT_NAME -> $target"
     fi
 done

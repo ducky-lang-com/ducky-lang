@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Duck logo">
+  <title>Duck - a red-orange D</title>
+  <defs>
+    <linearGradient id="duckGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#FF2D00"/>
+      <stop offset="55%"  stop-color="#FF5722"/>
+      <stop offset="100%" stop-color="#FF9100"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#duckGradient)" fill-rule="evenodd"
+        d="M24 14 H60 C96 14 116 36 116 64 C116 92 96 114 60 114 H24 Z
+           M48 38 V90 H60 C82 90 92 79 92 64 C92 49 82 38 60 38 Z"/>
+</svg>
