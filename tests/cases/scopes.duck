@@ -1,20 +1,20 @@
 // scopes.duck - block scope, shadowing and assignment.
-fn main() -> int {
-    let x = 1;
+wing main() -> int {
+    nest x = 1;
     {
-        let x = 2;
+        nest x = 2;
         serve(x);
     }
     serve(x);
 
-    let y = 10;
+    nest y = 10;
     y = y + 5;
     serve(y);
 
     {
-        let z = 3;
+        nest z = 3;
         y = y + z;
     }
     serve(y);
-    return 0;
+    send 0;
 }

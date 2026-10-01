@@ -216,6 +216,10 @@ static Type check_expr(Expr *e) {
             if (find_var(name)) {
                 err(e->line, e->col, "'%s' is a variable, not a function", name);
             }
+            if (strcmp(name, "print") == 0) {
+                err(e->line, e->col,
+                    "'print' does not exist in Duck - the output builtin is 'serve'");
+            }
             err(e->line, e->col, "undefined function '%s'", name);
         }
 
@@ -289,7 +293,7 @@ static void check_stmt(Stmt *s) {
         Type t = check_expr(s->ifs.cond);
         if (t != TY_BOOL) {
             err(s->ifs.cond->line, s->ifs.cond->col,
-                "the condition of 'if' must have type 'bool', found '%s'", type_name(t));
+                "the condition of 'when' must have type 'bool', found '%s'", type_name(t));
         }
         check_block(s->ifs.then_block);
         if (s->ifs.else_block) check_block(s->ifs.else_block);
@@ -389,10 +393,10 @@ void analyze(const SourceFile *src, Program *prog) {
 
     Func *entry = find_func(prog, "main");
     if (!entry) {
-        err(1, 1, "the program must define an entry point: 'fn main() -> int'");
+        err(1, 1, "the program must define an entry point: 'wing main() -> int'");
     }
     if (entry->nparams != 0 || entry->ret != TY_INT) {
-        err(entry->line, entry->col, "the entry point must be declared as 'fn main() -> int'");
+        err(entry->line, entry->col, "the entry point must be declared as 'wing main() -> int'");
     }
 
     /* Pass 2: check every body. */

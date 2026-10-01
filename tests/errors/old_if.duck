@@ -1,5 +1,7 @@
 wing main() -> int {
     nest x = 1;
-    nest x = 2;
+    if x == 1 {
+        serve("yes");
+    }
     send 0;
 }

@@ -10,9 +10,9 @@ interpreter — they talk to the kernel with raw syscalls.
 
 ```duck
 // examples/hello.duck
-fn main() -> int {
+wing main() -> int {
     serve("Hello, Duck!");
-    return 0;
+    send 0;
 }
 ```
 
@@ -32,8 +32,11 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
-v0.1.0 — the initial milestone is complete: full front end, type checker,
-native code generator, runtime, test suite and documentation. See
+v0.2.0 — Duck-native keywords: functions are declared with `wing`, variables
+with `nest`, conditions with `when` / `otherwise`, values come back with
+`send`, and output goes through `serve`. The old English spellings (`fn`,
+`let`, `if`, `else`, `return`, `print`) are retired: they are ordinary
+identifiers now and are rejected with a hint when used as syntax. See
 [ROADMAP.md](ROADMAP.md) for the requirements this release covers and what
 comes next.
 
@@ -42,11 +45,13 @@ comes next.
 * **Static typing** with three types: `int` (64-bit), `bool`, `string`.
   No implicit conversions; every mismatch is a compile error with a caret
   diagnostic.
+* **Duck-native keywords**: `wing` (functions), `nest` (variables), `when` /
+  `otherwise` (conditions), `send` (returns), `serve` (output).
 * **Functions** with any number of parameters (more than six use the stack,
   as the System V ABI prescribes), recursion and mutual recursion.
-* **Control flow**: `if` / `else if` / `else`, `while`, short-circuit
-  `&&` / `||`.
-* **Block scoping** with shadowing, `let` declarations with type inference or
+* **Control flow**: `when` / `otherwise when` / `otherwise`, `while`,
+  short-circuit `&&` / `||`.
+* **Block scoping** with shadowing, `nest` declarations with type inference or
   explicit annotations.
 * **String literals** with escapes and value equality (`==` compares contents).
 * **Freestanding output**: `_start` + syscalls, so binaries run without any
@@ -123,7 +128,10 @@ make uninstall-vscode
 
 Then run **Developer: Reload Window** (or restart the editor). It lives in
 [`editors/vscode/`](editors/vscode/) and can also be installed by hand — see
-its README. It is not published on the Marketplace / Open VSX yet.
+its README. The extension gives `.duck` files the amber D as their **file
+icon** in the explorer and tabs (declared as the language icon, so it works
+with your current file icon theme — no theme switch needed). It is not
+published on the Marketplace / Open VSX yet.
 
 ## Building
 
@@ -132,7 +140,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckc
-make test     # runs the test suite (22 tests)
+make test     # runs the test suite (30 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```

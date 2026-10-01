@@ -31,11 +31,11 @@ compiler built from scratch.
 | L1 | Lexical structure: comments (`//`, `/* */`), identifiers, keywords | done |
 | L2 | Literals: decimal/hex `int`, `bool`, `string` with escapes (`\n \t \r \\ \"`) | done |
 | L3 | Types: `int` (64-bit), `bool`, `string`; `void` for calls only; no implicit conversions | done |
-| L4 | `let` declarations with inference or annotation, assignment, block scopes + shadowing | done |
+| L4 | `nest` declarations with inference or annotation, assignment, block scopes + shadowing | done |
 | L5 | Expressions with full precedence: `\|\|` `&&` `==` `!=` `<` `<=` `>` `>=` `+` `-` `*` `/` `%`, unary `-` `!`, parentheses | done |
-| L6 | Control flow: `if` / `else if` / `else`, `while` | done |
+| L6 | Control flow: `when` / `otherwise when` / `otherwise`, `while` | done |
 | L7 | Functions: any arity (>6 via stack), `-> type`, recursion, mutual recursion, definite-return analysis | done |
-| L8 | Entry point `fn main() -> int`, return value = exit status | done |
+| L8 | Entry point `wing main() -> int`, return value = exit status | done |
 | L9 | Built-in `serve` for `int`, `bool`, `string` (newline-terminated) | done |
 | L10 | String equality by content (`==`, `!=`) | done |
 | L11 | Short-circuit evaluation of `&&` and `\|\|` | done |
@@ -54,6 +54,12 @@ compiler built from scratch.
 
 **Test count: 22 (10 runtime + 12 error), all passing.**
 
+**Update v0.2.0 (breaking):** the user-facing keywords are now Duck-native —
+`fn` → `wing`, `let` → `nest`, `if` → `when`, `else` → `otherwise`,
+`return` → `send`, `print` → `serve`. The old words are no longer keywords
+(identifiers such as `wingman` keep working) and old syntax is rejected with
+a hint. The suite grew to **30 tests (12 runtime + 18 error), all passing.**
+
 ---
 
 ## Milestone M1 — Next language features
@@ -71,7 +77,7 @@ compiler built from scratch.
 | N9 | Global constants (`const`) | |
 | N10 | Better errors: multiple errors per run instead of fail-fast | recovery in parser + sema |
 | N11 | Publish the extension to Open VSX and the VS Code Marketplace | needs a publisher account |
-| N12 | File icon for `.duck` files in the explorer (bundled icon theme; requires the user to select it, so it must not replace their theme wholesale) | |
+| N12 | File icon for `.duck` files in the explorer | done — declared as the language icon (light/dark); works with themes that have specific file icons (e.g. the default Seti) without replacing them |
 
 ## Milestone M2 — Engineering
 

@@ -1,11 +1,17 @@
 # Duck Language Specification
 
-**Version 0.1.0** — this document defines the syntax and semantics accepted by
+**Version 0.2.0** — this document defines the syntax and semantics accepted by
 `duckc`, the Duck compiler.
 
 Duck is a small, statically typed, imperative language. It compiles straight to
 x86-64 machine code (Linux, System V AMD64 ABI) with no runtime and no C
 library behind it.
+
+Its keywords are Duck-native words: `wing` (function), `nest` (variable),
+`when` (condition), `otherwise` (alternative), `send` (return) and the
+`serve` builtin. The old English spellings (`fn`, `let`, `if`, `else`,
+`return`, `print`) are no longer part of the language — they are ordinary
+identifiers now.
 
 ---
 
@@ -13,9 +19,9 @@ library behind it.
 
 ```duck
 // hello.duck
-fn main() -> int {
+wing main() -> int {
     serve("Hello, Duck!");
-    return 0;
+    send 0;
 }
 ```
 
@@ -62,10 +68,16 @@ Identifiers are case sensitive.
 
 | | | |
 |---|---|---|
-| `fn` | `let` | `return` |
-| `if` | `else` | `while` |
+| `wing` | `nest` | `send` |
+| `when` | `otherwise` | `while` |
 | `true` | `false` | |
 | `int` | `bool` | `string` |
+
+The retired English keywords `fn`, `let`, `if`, `else`, `return` and `print`
+are **not** keywords: they parse as ordinary identifiers, so `wingman` or a
+variable named `let` are valid names. Using them where syntax is expected is
+an error that names the replacement (`'fn' is not a Duck keyword anymore -
+use 'wing' instead`).
 
 ### 2.5 Integer literals
 
@@ -111,7 +123,7 @@ A program is a sequence of top-level function declarations. There are no
 globals and no separate declarations: **the entry point is**
 
 ```duck
-fn main() -> int { ... }
+wing main() -> int { ... }
 ```
 
 `main` must take no parameters and return `int`. Its return value becomes the
@@ -120,14 +132,14 @@ process exit status.
 Functions may be used before they are declared, so mutual recursion works:
 
 ```duck
-fn is_even(n: int) -> bool {
-    if n == 0 { return true; }
-    return is_odd(n - 1);
+wing is_even(n: int) -> bool {
+    when n == 0 { send true; }
+    send is_odd(n - 1);
 }
 
-fn is_odd(n: int) -> bool {
-    if n == 0 { return false; }
-    return is_even(n - 1);
+wing is_odd(n: int) -> bool {
+    when n == 0 { send false; }
+    send is_even(n - 1);
 }
 ```
 
@@ -140,8 +152,8 @@ Omitting `-> type` gives the function return type `void`.
 ### 5.1 Declarations
 
 ```duck
-let x = 10;          // type inferred from the initializer
-let y: int = 10;     // explicit annotation (must match exactly)
+nest x = 10;          // type inferred from the initializer
+nest y: int = 10;     // explicit annotation (must match exactly)
 ```
 
 A variable is visible from its declaration to the end of the enclosing block.
@@ -163,14 +175,14 @@ Assignment is a statement, not an expression.
 serve(x);            // typically a call
 ```
 
-### 5.4 `if` / `else if` / `else`
+### 5.4 `when` / `otherwise when` / `otherwise`
 
 ```duck
-if score >= 90 {
+when score >= 90 {
     serve("A");
-} else if score >= 50 {
+} otherwise when score >= 50 {
     serve("B");
-} else {
+} otherwise {
     serve("C");
 }
 ```
@@ -187,11 +199,11 @@ while i < 10 {
 
 The condition must have type `bool`.
 
-### 5.6 `return`
+### 5.6 `send`
 
 ```duck
-return;              // only in functions with return type void
-return expression;
+send;              // only in functions with return type void
+send expression;
 ```
 
 A function whose return type is not `void` must return a value on **every**
@@ -278,7 +290,7 @@ newline, using raw `write` syscalls (it is unbuffered). Returns `void`.
 ```ebnf
 program      := func-decl { func-decl } ;
 
-func-decl    := "fn" IDENT "(" [ param-list ] ")" [ "->" type ] block ;
+func-decl    := "wing" IDENT "(" [ param-list ] ")" [ "->" type ] block ;
 param-list   := param { "," param } ;
 param        := IDENT ":" type ;
 type         := "int" | "bool" | "string" ;
@@ -293,11 +305,11 @@ stmt         := let-stmt
               | block
               | expr ";" ;
 
-let-stmt     := "let" IDENT [ ":" type ] "=" expr ";" ;
+let-stmt     := "nest" IDENT [ ":" type ] "=" expr ";" ;
 assign-stmt  := IDENT "=" expr ";" ;
-if-stmt      := "if" expr block [ "else" ( if-stmt | block ) ] ;
+if-stmt      := "when" expr block [ "otherwise" ( if-stmt | block ) ] ;
 while-stmt   := "while" expr block ;
-return-stmt  := "return" [ expr ] ";" ;
+return-stmt  := "send" [ expr ] ";" ;
 
 expr         := or-expr ;
 or-expr      := and-expr { "||" and-expr } ;

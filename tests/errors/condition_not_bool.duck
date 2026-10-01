@@ -1,6 +1,6 @@
-fn main() -> int {
-    if 1 {
+wing main() -> int {
+    when 1 {
         serve("no");
     }
-    return 0;
+    send 0;
 }

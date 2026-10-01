@@ -1,8 +1,8 @@
-fn nothing() {
+wing nothing() {
     serve("nothing");
 }
 
-fn main() -> int {
-    let v = nothing();
-    return 0;
+wing main() -> int {
+    nest v = nothing();
+    send 0;
 }

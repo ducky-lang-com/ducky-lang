@@ -1,4 +1,4 @@
-fn main() -> int {
-    let x: int = "hello";
-    return 0;
+wing main() -> int {
+    nest x: int = "hello";
+    send 0;
 }

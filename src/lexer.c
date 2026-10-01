@@ -52,8 +52,8 @@ static struct {
     const char *word;
     TokenKind kind;
 } keywords[] = {
-    {"fn", TK_FN},         {"let", TK_LET},       {"if", TK_IF},
-    {"else", TK_ELSE},     {"while", TK_WHILE},   {"return", TK_RETURN},
+    {"wing", TK_FN},       {"nest", TK_LET},      {"when", TK_IF},
+    {"otherwise", TK_ELSE}, {"while", TK_WHILE},  {"send", TK_RETURN},
     {"true", TK_TRUE},     {"false", TK_FALSE},   {"int", TK_KW_INT},
     {"bool", TK_KW_BOOL},  {"string", TK_KW_STRING},
 };
@@ -316,12 +316,12 @@ const char *token_kind_name(TokenKind k) {
     case TK_IDENT:     return "identifier";
     case TK_INT:       return "integer";
     case TK_STRING:    return "string";
-    case TK_FN:        return "fn";
-    case TK_LET:       return "let";
-    case TK_IF:        return "if";
-    case TK_ELSE:      return "else";
+    case TK_FN:        return "wing";
+    case TK_LET:       return "nest";
+    case TK_IF:        return "when";
+    case TK_ELSE:      return "otherwise";
     case TK_WHILE:     return "while";
-    case TK_RETURN:    return "return";
+    case TK_RETURN:    return "send";
     case TK_TRUE:      return "true";
     case TK_FALSE:     return "false";
     case TK_KW_INT:    return "int";

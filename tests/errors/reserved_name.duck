@@ -1,7 +1,7 @@
-fn _internal() {
+wing _internal() {
     serve("x");
 }
 
-fn main() -> int {
-    return 0;
+wing main() -> int {
+    send 0;
 }

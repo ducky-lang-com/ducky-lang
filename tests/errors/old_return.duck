@@ -1,5 +1,4 @@
 wing main() -> int {
     nest x = 1;
-    nest x = 2;
-    send 0;
+    return x;
 }

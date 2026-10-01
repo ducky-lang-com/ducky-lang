@@ -1,22 +1,22 @@
-// control.duck - if / else if / else and while loops.
-fn main() -> int {
-    let x = 10;
-    if x > 5 {
+// control.duck - when / otherwise when / otherwise and while loops.
+wing main() -> int {
+    nest x = 10;
+    when x > 5 {
         serve("big");
-    } else {
+    } otherwise {
         serve("small");
     }
 
-    if x == 10 {
+    when x == 10 {
         serve("ten");
-    } else if x == 9 {
+    } otherwise when x == 9 {
         serve("nine");
-    } else {
+    } otherwise {
         serve("other");
     }
 
-    let i = 0;
-    let sum = 0;
+    nest i = 0;
+    nest sum = 0;
     while i < 5 {
         sum = sum + i;
         i = i + 1;
@@ -27,14 +27,14 @@ fn main() -> int {
         serve("never");
     }
 
-    if !false {
+    when !false {
         serve("not false");
     }
 
-    if true {
-        if x == 10 {
+    when true {
+        when x == 10 {
             serve("nested");
         }
     }
-    return 0;
+    send 0;
 }

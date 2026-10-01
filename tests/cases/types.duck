@@ -1,10 +1,10 @@
 // types.duck - explicit annotations and inferred types.
-fn main() -> int {
-    let a: int = 5;
-    let b: bool = true;
-    let c: string = "duck";
-    let d = 6;
-    let e = false;
+wing main() -> int {
+    nest a: int = 5;
+    nest b: bool = true;
+    nest c: string = "duck";
+    nest d = 6;
+    nest e = false;
 
     serve(a);
     serve(b);
@@ -13,5 +13,5 @@ fn main() -> int {
     serve(e);
     serve(-a);
     serve(!b);
-    return 0;
+    send 0;
 }

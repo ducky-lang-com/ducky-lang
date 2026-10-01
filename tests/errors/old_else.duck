@@ -1,0 +1,8 @@
+wing main() -> int {
+    when true {
+        serve("a");
+    } else {
+        serve("b");
+    }
+    send 0;
+}

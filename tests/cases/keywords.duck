@@ -1,0 +1,13 @@
+// keywords.duck - the six Duck-native keywords used together:
+// wing, nest, when, otherwise, send, serve.
+wing main() -> int {
+    nest number = 1;
+
+    when number == 1 {
+        serve("Hello Duck!");
+    } otherwise {
+        serve("Goodbye Duck!");
+    }
+
+    send 0;
+}

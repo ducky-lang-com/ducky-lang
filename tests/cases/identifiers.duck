@@ -1,0 +1,22 @@
+// identifiers.duck - retired keywords are ordinary identifiers, and words
+// that merely contain them (wingman, let, if, ...) are identifiers too.
+wing main() -> int {
+    nest wingman = 1;
+    nest lets = wingman + 1;
+    nest iffy = lets + 1;
+    nest elser = iffy + 1;
+    nest returns = elser + 1;
+    nest println = returns + 1;
+    nest let = println + 1;
+    nest fn = let + 1;
+
+    serve(wingman); // 1
+    serve(lets);    // 2
+    serve(iffy);    // 3
+    serve(elser);   // 4
+    serve(returns); // 5
+    serve(println); // 6
+    serve(let);     // 7
+    serve(fn);      // 8
+    send 0;
+}

@@ -1,17 +1,17 @@
 // manyargs.duck - more than six parameters travel on the stack (System V ABI).
-fn sum8(a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int) -> int {
-    return a + b + c + d + e + f + g + h;
+wing sum8(a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int) -> int {
+    send a + b + c + d + e + f + g + h;
 }
 
-fn sixth(a: int, b: int, c: int, d: int, e: int, f: int) -> int {
-    return a * 100 + f;
+wing sixth(a: int, b: int, c: int, d: int, e: int, f: int) -> int {
+    send a * 100 + f;
 }
 
-fn main() -> int {
+wing main() -> int {
     serve(sum8(1, 2, 3, 4, 5, 6, 7, 8));
     serve(sum8(10, 20, 30, 40, 50, 60, 70, 80));
     serve(sixth(1, 2, 3, 4, 5, 6));
     serve(sum8(sum8(1, 1, 1, 1, 1, 1, 1, 1), 0, 0, 0, 0, 0, 0, 8));
     serve(sum8(1, 2, 3, 4, 5, 6, 7, 8) + sum8(8, 7, 6, 5, 4, 3, 2, 1));
-    return 0;
+    send 0;
 }

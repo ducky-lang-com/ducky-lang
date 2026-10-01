@@ -67,7 +67,7 @@
     "function-definition": {
       "patterns": [
         {
-          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(wing)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.control.duck" },
             "2": { "name": "entity.name.function.duck" }
@@ -78,7 +78,7 @@
     "let-declaration": {
       "patterns": [
         {
-          "match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(nest)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.control.duck" },
             "2": { "name": "variable.other.duck" }
@@ -90,7 +90,7 @@
       "patterns": [
         {
           "name": "keyword.control.duck",
-          "match": "\\b(fn|let|if|else|while|return)\\b"
+          "match": "\\b(wing|nest|when|otherwise|while|send)\\b"
         }
       ]
     },

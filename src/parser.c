@@ -48,6 +48,19 @@ static void describe(Token *t, char *buf, size_t buflen) {
     }
 }
 
+/* The retired English keywords and the Duck-native word that replaced
+ * them. The old words are ordinary identifiers now; when their use breaks
+ * the syntax we point the user at the new spelling. */
+static const char *retired_keyword(const char *name) {
+    if (strcmp(name, "fn") == 0) return "wing";
+    if (strcmp(name, "let") == 0) return "nest";
+    if (strcmp(name, "if") == 0) return "when";
+    if (strcmp(name, "else") == 0) return "otherwise";
+    if (strcmp(name, "return") == 0) return "send";
+    if (strcmp(name, "print") == 0) return "serve";
+    return NULL;
+}
+
 static Token *expect(TokenKind k, const char *what) {
     if (check(k)) return next();
     char got[64];
@@ -342,7 +355,7 @@ static Block *parse_block(void) {
 
 static Stmt *parse_let(void) {
     Token *kw = next(); /* let */
-    Token *name = expect(TK_IDENT, "a variable name after 'let'");
+    Token *name = expect(TK_IDENT, "a variable name after 'nest'");
 
     Stmt *s = new_stmt(ST_LET, kw->line, kw->col);
     s->let.name = name->name;
@@ -350,7 +363,7 @@ static Stmt *parse_let(void) {
         s->let.has_ann = 1;
         s->let.ann = parse_type();
     }
-    expect(TK_ASSIGN, "'=' in a 'let' declaration");
+    expect(TK_ASSIGN, "'=' in a 'nest' declaration");
     s->let.init = parse_expr();
     expect(TK_SEMI, "';' after the declaration");
     return s;
@@ -393,7 +406,7 @@ static Stmt *parse_return(void) {
     Token *kw = next(); /* return */
     Stmt *s = new_stmt(ST_RETURN, kw->line, kw->col);
     if (!check(TK_SEMI)) s->value = parse_expr();
-    expect(TK_SEMI, "';' after 'return'");
+    expect(TK_SEMI, "';' after 'send'");
     return s;
 }
 
@@ -431,7 +444,19 @@ static Stmt *parse_stmt(void) {
         break;
     }
 
+    /* An expression statement: if it does not end with ';' and it started
+     * with one of the retired keywords, give a targeted hint instead of the
+     * generic "expected ';'" message. */
+    Token *start = peek();
     Expr *e = parse_expr();
+    if (!check(TK_SEMI) && start->kind == TK_IDENT) {
+        const char *new_word = retired_keyword(start->name);
+        if (new_word) {
+            fatal_at(P.src, start->line, start->col,
+                     "'%s' is not a Duck keyword anymore - use '%s' instead",
+                     start->name, new_word);
+        }
+    }
     expect(TK_SEMI, "';' after the expression");
     Stmt *s = new_stmt(ST_EXPR, e->line, e->col);
     s->expr = e;
@@ -441,7 +466,7 @@ static Stmt *parse_stmt(void) {
 /* ---------- top level ------------------------------------------------------ */
 
 static Func *parse_func(void) {
-    Token *kw = expect(TK_FN, "'fn' to start a function declaration");
+    Token *kw = expect(TK_FN, "'wing' to start a function declaration");
     Token *name = expect(TK_IDENT, "a function name");
 
     Func *f = arena_alloc(sizeof(Func));
@@ -487,10 +512,18 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     Vec funcs = {0};
     while (!check(TK_EOF)) {
         if (!check(TK_FN)) {
+            if (check(TK_IDENT)) {
+                const char *new_word = retired_keyword(peek()->name);
+                if (new_word) {
+                    fatal_at(src, peek()->line, peek()->col,
+                             "'%s' is not a Duck keyword anymore - use '%s' instead",
+                             peek()->name, new_word);
+                }
+            }
             char got[64];
             describe(peek(), got, sizeof(got));
             fatal_at(src, peek()->line, peek()->col,
-                     "expected a top-level function declaration ('fn'), found %s", got);
+                     "expected a top-level function declaration ('wing'), found %s", got);
         }
         vec_push(&funcs, parse_func());
     }
