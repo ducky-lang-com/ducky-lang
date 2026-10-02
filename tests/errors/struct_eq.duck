@@ -1,0 +1,9 @@
+struct Point { x: int }
+fn main() -> int {
+    let a = Point(1);
+    let b = Point(1);
+    if a == b {
+        serve(1);
+    }
+    send 0;
+}

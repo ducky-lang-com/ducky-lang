@@ -32,10 +32,11 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
-v0.4.0 — adds **floats (`float`, IEEE-754 binary64)**, **arrays** (`[int]`
-literals, bounds-checked `xs[i]` reads and writes, `len()`, `push()`),
-**string indexing** (`s[i]` → a one-byte string) and top-level **`const`**
-declarations, plus the `float(x)` / `int(x)` conversions. On top of v0.3.0's
+v0.5.0 — adds **structs**: `struct Point { x: int, y: int }` declarations
+with positional construction (`Point(3, 4)`), field reads and writes (`p.x`,
+`p.x = 10`), reference semantics between variables, structs as parameters,
+return values and fields, and declaration order that does not matter. On top
+of v0.4.0's floats, arrays, string indexing and `const`; v0.3.0 introduced the
 English keywords (`fn`, `let`, `if`, `else`, `send`, `serve`); the Duck-era
 words `wing`, `nest`, `when`, `otherwise` (and the older `return`, `print`)
 are ordinary identifiers now and are rejected with a hint when used as syntax.
@@ -44,10 +45,15 @@ comes next.
 
 ## Features
 
-* **Static typing** with five types: `int` (64-bit), `float` (f64), `bool`,
-  `string` and fixed-length arrays (`[int]`, `[float]`, `[bool]`,
-  `[string]`). No implicit conversions; every mismatch is a compile error with
-  a caret diagnostic. `float(x)` / `int(x)` convert explicitly.
+* **Static typing** with the built-in types `int` (64-bit), `float` (f64),
+  `bool`, `string` and fixed-length arrays (`[int]`, `[float]`, `[bool]`,
+  `[string]`), plus user-defined `struct` records. No implicit conversions;
+  every mismatch is a compile error with a caret diagnostic. `float(x)` /
+  `int(x)` convert explicitly.
+* **Structs**: `struct Point { x: int, y: int }` with positional construction
+  (`Point(3, 4)`), field access and assignment (`p.x`, `p.x = 10`), reference
+  semantics (assignments share the value, like arrays), structs as parameters,
+  return values and fields, and free declaration order.
 * **Functions and variables** with `fn` / `let` (type inference or explicit
   annotation), `send` for returns, `serve` for output, and top-level `const`
   declarations (`const LIMIT = 10;` — literals only, order does not matter).
@@ -155,7 +161,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckc
-make test     # runs the test suite (59 tests)
+make test     # runs the test suite (78 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
@@ -216,7 +222,7 @@ duck-lang/
 ├── editors/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
-├── SPEC.md            language specification v0.4.0
+├── SPEC.md            language specification v0.5.0
 ├── ROADMAP.md         requirements: delivered and planned
 ├── src/
 │   ├── common.{h,c}   arena allocator, file loading, diagnostics
@@ -227,7 +233,7 @@ duck-lang/
 │   ├── codegen.{h,c}  x86-64 backend + runtime emission
 │   ├── version.h      version constants
 │   └── main.c         duckc command line driver (as + ld invocation)
-├── examples/          hello, fibonacci, fizzbuzz, averages
+├── examples/          hello, fibonacci, fizzbuzz, averages, structs
 └── tests/
     ├── run_tests.sh   test harness
     ├── cases/         programs with expected stdout (and exit status)

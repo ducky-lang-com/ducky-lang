@@ -13,6 +13,7 @@ typedef enum {
 
     /* keywords */
     TK_FN,
+    TK_STRUCT,
     TK_CONST,
     TK_LET,
     TK_IF,
@@ -41,6 +42,7 @@ typedef enum {
     TK_SEMI,
     TK_COLON,
     TK_ARROW,
+    TK_DOT,
     TK_DOTDOT,
 
     /* operators */

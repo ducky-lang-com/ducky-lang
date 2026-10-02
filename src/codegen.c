@@ -274,6 +274,24 @@ static void gen_binary(Expr *e) {
 }
 
 static void gen_call(Expr *e) {
+    if (e->call.sdef) {
+        /* Struct constructor: one heap block of 8-byte field slots. The
+         * block waits in a hidden stack slot while the fields are
+         * evaluated, so constructors nest safely (array-literal shape). */
+        StructDecl *sd = e->call.sdef;
+        int size = 8 * sd->nfields;
+        if (size == 0) size = 8; /* an empty struct still owns a block */
+        emit("    mov $%d, %%rdi\n", size);
+        emit_call("duck_alloc");
+        emit("    mov %%rax, %d(%%rbp)\n", e->call.slot);
+        for (int i = 0; i < sd->nfields; i++) {
+            gen_expr(e->call.args[i]);
+            emit("    mov %d(%%rbp), %%rdi\n", e->call.slot);
+            emit("    mov %%rax, %d(%%rdi)\n", 8 * i);
+        }
+        emit("    mov %d(%%rbp), %%rax\n", e->call.slot);
+        return;
+    }
     if (e->call.builtin != BUILTIN_NONE) {
         switch (e->call.builtin) {
         case BUILTIN_SERVE: {
@@ -458,6 +476,13 @@ static void gen_expr(Expr *e) {
         }
         break;
     }
+
+    case EX_FIELD:
+        /* Struct values are block pointers: the field is the 8-byte slot
+         * at a fixed offset, chosen by semantic analysis. */
+        gen_expr(e->field.obj);
+        emit("    mov %d(%%rax), %%rax\n", e->field.offset);
+        break;
     }
 }
 
@@ -474,8 +499,17 @@ static void gen_stmt(Stmt *s) {
 
     case ST_ASSIGN:
         if (s->assign.target) {
-            /* `xs[i] = v;` - bounds-check, form &xs[i], then store. */
             Expr *tg = s->assign.target;
+            if (tg->kind == EX_FIELD) {
+                /* `p.field = v;` - evaluate the struct, then the value. */
+                gen_expr(tg->field.obj);
+                push_rax();
+                gen_expr(s->assign.value);
+                pop_rdi(); /* block in %rdi, value in %rax */
+                emit("    mov %%rax, %d(%%rdi)\n", tg->field.offset);
+                break;
+            }
+            /* `xs[i] = v;` - bounds-check, form &xs[i], then store. */
             gen_expr(tg->index.obj);
             push_rax();
             gen_expr(tg->index.idx);

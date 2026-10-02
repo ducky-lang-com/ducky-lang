@@ -74,7 +74,7 @@ all passing.**
 | N4 | String operations: `+` concatenation, `len`, indexing | done — v0.4.0; `+`/`len()` in v0.3.0, `s[i]` returns a one-byte string (bounds-checked) |
 | N5 | Standard input: `input_line()` reading from stdin | done — v0.3.0; `read` syscall, one line per call, EOF → `""` |
 | N6 | Multiple source files / `import` | driver links several `.o` |
-| N7 | Structs and field access | blocked on a nominal-types refactor |
+| N7 | Structs and field access | done — v0.5.0; `struct Name { f: T, ... }` top-level declarations (comma-separated fields, trailing comma allowed), nominal typing via an interned type registry (`TY_STRUCT_BASE + index`, no full type refactor needed), positional constructors `Point(1, 2)` with arity/type checks, field read/write `p.x` / `p.x = v` (`.` lexes as a new `TK_DOT`), reference semantics, structs as parameters/returns/fields, free declaration order (parser pre-pass interns names), `==`/`serve`/arrays-of-structs rejected, duplicate/reserved/builtin/colliding names rejected |
 | N8 | `break` / `continue` | done — v0.3.0; innermost loop at any nesting depth |
 | N9 | Global constants (`const`) | done — v0.4.0; top-level `const NAME = <literal>;`, literals only, any declaration order, no storage (references substitute the literal), locals may shadow |
 | N10 | Better errors: multiple errors per run instead of fail-fast | recovery in parser + sema |
@@ -84,8 +84,13 @@ all passing.**
 | N14 | `str()` builtin (`int`/`bool` → `string`) | done — v0.3.0; extended to `float` in v0.4.0 |
 
 **Update v0.4.0:** floats, arrays (with string indexing), `const`, `push()`
-and the numeric conversions. The suite is now **59 tests (22 runtime + 37
+and the numeric conversions. The suite is then **59 tests (22 runtime + 37
 error), all passing.**
+
+**Update v0.5.0:** structs — declarations, constructors, field access and
+assignment, reference semantics, structs everywhere a value can go (plus the
+rejections: comparison, `serve`, arrays of structs, name collisions). The
+suite is now **78 tests (23 runtime + 55 error), all passing.**
 
 ## Milestone M2 — Engineering
 

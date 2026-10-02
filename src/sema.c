@@ -171,6 +171,11 @@ static Type check_expr(Expr *e) {
             e->kind = lit->kind;
             return e->type = lit->type;
         }
+        if (struct_type_lookup(e->var.name)) {
+            err(e->line, e->col,
+                "'%s' is a struct type - construct a value with %s(...)",
+                e->var.name, e->var.name);
+        }
         err(e->line, e->col, "undefined variable '%s'", e->var.name);
         return e->type = TY_VOID; /* unreachable */
     }
@@ -296,6 +301,11 @@ static Type check_expr(Expr *e) {
                     "arrays cannot be compared with '%s' - compare elements instead",
                     binary_op_name(op));
             }
+            if (l >= TY_STRUCT_BASE) {
+                err(e->line, e->col,
+                    "struct values cannot be compared with '%s' - compare fields instead",
+                    binary_op_name(op));
+            }
             return e->type = TY_BOOL;
         }
         return e->type = TY_VOID; /* unreachable */
@@ -318,7 +328,7 @@ static Type check_expr(Expr *e) {
         if (et == TY_VOID) {
             err(e->line, e->col, "cannot store a value of type 'void' in an array");
         }
-        if (type_is_array(et)) {
+        if (type_is_array(et) || et >= TY_STRUCT_BASE) {
             err(e->line, e->col, "arrays of '%s' are not supported yet", type_name(et));
         }
         e->array.slot = alloc_slot();
@@ -338,6 +348,23 @@ static Type check_expr(Expr *e) {
         return e->type = TY_VOID; /* unreachable */
     }
 
+    case EX_FIELD: {
+        Type ot = check_expr(e->field.obj);
+        StructDecl *sd = ot >= TY_STRUCT_BASE ? struct_type_decl(ot) : NULL;
+        if (!sd) {
+            err(e->line, e->col, "cannot access field '%s' on a value of type '%s'",
+                e->field.name, type_name(ot));
+        }
+        for (int i = 0; i < sd->nfields; i++) {
+            if (strcmp(sd->fields[i]->name, e->field.name) == 0) {
+                e->field.offset = 8 * i;
+                return e->type = sd->fields[i]->type;
+            }
+        }
+        err(e->line, e->col, "'%s' has no field '%s'", sd->name, e->field.name);
+        return e->type = TY_VOID; /* unreachable */
+    }
+
     case EX_CALL: {
         const char *name = e->call.name;
 
@@ -347,7 +374,7 @@ static Type check_expr(Expr *e) {
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t == TY_VOID || type_is_array(t)) {
+            if (t == TY_VOID || type_is_array(t) || t >= TY_STRUCT_BASE) {
                 err(e->line, e->col, "cannot pass a value of type '%s' to serve()",
                     type_name(t));
             }
@@ -442,6 +469,30 @@ static Type check_expr(Expr *e) {
             return e->type = at;
         }
 
+        /* A struct constructor: `Point(1, 2)` resolves against the registry
+         * (interned by the parser pre-pass), not the function table. */
+        StructDecl *sdef = struct_type_lookup(name);
+        if (sdef) {
+            if (e->call.nargs != sdef->nfields) {
+                err(e->line, e->col,
+                    "struct constructor '%s' expects %d argument%s, found %d",
+                    name, sdef->nfields, sdef->nfields == 1 ? "" : "s",
+                    e->call.nargs);
+            }
+            for (int i = 0; i < e->call.nargs; i++) {
+                Type t = check_expr(e->call.args[i]);
+                if (t != sdef->fields[i]->type) {
+                    err(e->call.args[i]->line, e->call.args[i]->col,
+                        "field '%s' of '%s' expects '%s', found '%s'",
+                        sdef->fields[i]->name, name,
+                        type_name(sdef->fields[i]->type), type_name(t));
+                }
+            }
+            e->call.sdef = sdef;
+            e->call.slot = alloc_slot(); /* hidden slot holding the block */
+            return e->type = sdef->type;
+        }
+
         /* Resolved against the global function table collected in analyze(). */
         Func *fn = find_func(g_prog, name);
         if (!fn) {
@@ -514,8 +565,23 @@ static void check_stmt(Stmt *s) {
 
     case ST_ASSIGN: {
         if (s->assign.target) {
-            /* `xs[i] = v;` - the target must be an element of an array. */
             Expr *tg = s->assign.target;
+            if (tg->kind == EX_FIELD) {
+                /* `p.field = v;` - resolve the field, then match the value. */
+                check_expr(tg);
+                Type t = check_expr(s->assign.value);
+                if (t == TY_VOID) {
+                    err(s->line, s->col, "cannot assign a value of type 'void'");
+                }
+                if (t != tg->type) {
+                    err(s->line, s->col,
+                        "type mismatch: cannot assign '%s' to field '%s' of type '%s'",
+                        type_name(t), tg->field.name, type_name(tg->type));
+                }
+                break;
+            }
+
+            /* `xs[i] = v;` - the target must be an element of an array. */
             Type ot = check_expr(tg->index.obj);
             Type it = check_expr(tg->index.idx);
             if (it != TY_INT) {
@@ -701,6 +767,38 @@ void analyze(const SourceFile *src, Program *prog) {
         case EX_FLOAT: c->value->type = TY_FLOAT; break;
         case EX_BOOL:  c->value->type = TY_BOOL; break;
         default:       c->value->type = TY_STRING; break;
+        }
+    }
+
+    /* Pass 0.5: validate the struct declarations (duplicate struct names are
+     * already rejected by the parser pre-pass). */
+    for (int i = 0; i < prog->nstructs; i++) {
+        StructDecl *sd = prog->structs[i];
+
+        if (sd->name[0] == '_' || starts_with(sd->name, "duck_")) {
+            err(sd->line, sd->col, "struct name '%s' is reserved", sd->name);
+        }
+        if (is_builtin_name(sd->name)) {
+            err(sd->line, sd->col, "'%s' is a builtin function and cannot be redefined",
+                sd->name);
+        }
+        if (find_func(prog, sd->name)) {
+            err(sd->line, sd->col, "'%s' is already declared as a function", sd->name);
+        }
+        if (find_const(prog, sd->name)) {
+            err(sd->line, sd->col, "'%s' is already declared as a constant", sd->name);
+        }
+        for (int j = 0; j < sd->nfields; j++) {
+            Field *f = sd->fields[j];
+            if (f->name[0] == '_' || starts_with(f->name, "duck_")) {
+                err(f->line, f->col, "field name '%s' is reserved", f->name);
+            }
+            for (int k = 0; k < j; k++) {
+                if (strcmp(sd->fields[k]->name, f->name) == 0) {
+                    err(f->line, f->col, "duplicate field '%s' in struct '%s'",
+                        f->name, sd->name);
+                }
+            }
         }
     }
 

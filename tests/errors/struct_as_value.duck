@@ -1,0 +1,5 @@
+struct Point { x: int }
+fn main() -> int {
+    serve(Point);
+    send 0;
+}

@@ -3,7 +3,10 @@
 #define DUCK_AST_H
 
 /* ---------- types ------------------------------------------------------ */
-typedef enum {
+/* Scalar and array types are small integers. Struct types are interned:
+ * every `struct` declaration gets TY_STRUCT_BASE + index into the registry
+ * (common.c), so nominal typing needs no other refactor. */
+enum {
     TY_INT,     /* 64-bit signed integer  */
     TY_FLOAT,   /* 64-bit IEEE-754 float  */
     TY_BOOL,    /* boolean                */
@@ -12,10 +15,23 @@ typedef enum {
     TY_ARR_FLOAT,   /* [float]  fixed-length array of float  */
     TY_ARR_BOOL,    /* [bool]   fixed-length array of bool   */
     TY_ARR_STRING,  /* [string] fixed-length array of string */
-    TY_VOID     /* no value (only for calls) */
-} Type;
+    TY_VOID,    /* no value (only for calls) */
+    TY_STRUCT_BASE = 64 /* struct types live at TY_STRUCT_BASE + index */
+};
+
+typedef int Type;
+
+/* A struct declaration; opaque here, defined below. */
+typedef struct StructDecl StructDecl;
+
+/* Struct type registry (common.c). */
+StructDecl *struct_type_intern(const char *name);
+StructDecl *struct_type_lookup(const char *name);
+StructDecl *struct_type_decl(Type t);
+const char *struct_type_name(Type t);
 
 static inline const char *type_name(Type t) {
+    if (t >= TY_STRUCT_BASE) return struct_type_name(t);
     switch (t) {
     case TY_INT:        return "int";
     case TY_FLOAT:      return "float";
@@ -66,7 +82,8 @@ typedef enum {
     EX_BINARY,
     EX_CALL,
     EX_ARRAY,
-    EX_INDEX
+    EX_INDEX,
+    EX_FIELD
 } ExprKind;
 
 typedef enum { UOP_NEG, UOP_NOT, UOP_BITNOT } UnaryOp;
@@ -121,8 +138,10 @@ struct Expr {
             char *name;
             Expr **args;
             int nargs;
-            Func *fn;  /* resolved callee */
+            Func *fn;        /* resolved callee */
             Builtin builtin;
+            StructDecl *sdef; /* struct being constructed (NULL otherwise) */
+            int slot;         /* hidden stack slot holding the block */
         } call;
         struct {
             Expr **elems;
@@ -133,6 +152,11 @@ struct Expr {
             Expr *obj; /* array or string */
             Expr *idx;
         } index; /* EX_INDEX */
+        struct {
+            Expr *obj;      /* value of struct type */
+            char *name;     /* field name */
+            int offset;     /* byte offset in the block, set by sema */
+        } field; /* EX_FIELD */
     };
 };
 
@@ -221,6 +245,26 @@ typedef struct Const {
     int col;
 } Const;
 
+/* ---------- structs ------------------------------------------------------- */
+/* A top-level `struct Name { field: Type, ... };`. A struct value is a
+ * reference to a heap block of 8-byte field slots (no header), so every
+ * field - including another struct - occupies exactly 8 bytes. */
+typedef struct Field {
+    char *name;
+    Type type;
+    int line;
+    int col;
+} Field;
+
+struct StructDecl {
+    char *name;
+    Field **fields;
+    int nfields;
+    Type type;  /* TY_STRUCT_BASE + registry index */
+    int line;
+    int col;
+};
+
 struct Func {
     char *name;
     Param **params;
@@ -237,6 +281,8 @@ typedef struct Program {
     int nfuncs;
     Const **consts;
     int nconsts;
+    StructDecl **structs;
+    int nstructs;
 } Program;
 
 const char *unary_op_name(UnaryOp op);

@@ -109,6 +109,50 @@ void fatal_at(const SourceFile *f, int line, int col, const char *fmt, ...) {
     exit(1);
 }
 
+/* ---------- struct type registry ------------------------------------------
+ * Struct names are interned by a parser pre-pass before any declaration is
+ * parsed, so a struct may be used before (or after) its declaration. Each
+ * interned struct owns the Type value TY_STRUCT_BASE + index, which is what
+ * makes the typing nominal: only a declaration can produce that integer. */
+
+static StructDecl **g_structs;
+static int g_nstructs;
+static int g_structs_cap;
+
+StructDecl *struct_type_intern(const char *name) {
+    if (g_nstructs == g_structs_cap) {
+        g_structs_cap = g_structs_cap ? g_structs_cap * 2 : 8;
+        StructDecl **ns = realloc(g_structs,
+                                  (size_t)g_structs_cap * sizeof(StructDecl *));
+        if (!ns) fatal("out of memory");
+        g_structs = ns;
+    }
+    StructDecl *sd = arena_alloc(sizeof(StructDecl));
+    memset(sd, 0, sizeof(*sd));
+    sd->name = arena_strndup(name, strlen(name));
+    sd->type = TY_STRUCT_BASE + g_nstructs;
+    g_structs[g_nstructs++] = sd;
+    return sd;
+}
+
+StructDecl *struct_type_lookup(const char *name) {
+    for (int i = 0; i < g_nstructs; i++) {
+        if (strcmp(g_structs[i]->name, name) == 0) return g_structs[i];
+    }
+    return NULL;
+}
+
+StructDecl *struct_type_decl(Type t) {
+    int idx = t - TY_STRUCT_BASE;
+    if (idx < 0 || idx >= g_nstructs) return NULL;
+    return g_structs[idx];
+}
+
+const char *struct_type_name(Type t) {
+    StructDecl *sd = struct_type_decl(t);
+    return sd ? sd->name : "?";
+}
+
 /* ---------- AST helper names -------------------------------------------- */
 
 const char *unary_op_name(UnaryOp op) {

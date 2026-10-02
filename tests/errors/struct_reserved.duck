@@ -1,0 +1,4 @@
+struct _Point { x: int }
+fn main() -> int {
+    send 0;
+}

@@ -130,6 +130,16 @@ static Type parse_type(void) {
     case TK_KW_FLOAT:  next(); return TY_FLOAT;
     case TK_KW_BOOL:   next(); return TY_BOOL;
     case TK_KW_STRING: next(); return TY_STRING;
+    case TK_IDENT: {
+        next();
+        StructDecl *sd = struct_type_lookup(t->name);
+        if (!sd) {
+            fatal_at(P.src, t->line, t->col,
+                     "unknown type '%s' - expected int, float, bool, string, [T] or a struct name",
+                     t->name);
+        }
+        return sd->type;
+    }
     case TK_LBRACKET: {
         next(); /* [ */
         Type elem = parse_type();
@@ -145,7 +155,7 @@ static Type parse_type(void) {
         char got[64];
         describe(t, got, sizeof(got));
         fatal_at(P.src, t->line, t->col,
-                 "expected a type (int, float, bool, string or [T]), found %s", got);
+                 "expected a type (int, float, bool, string, [T] or a struct name), found %s", got);
     }
     }
     return TY_VOID; /* unreachable */
@@ -268,6 +278,13 @@ static Expr *parse_postfix(void) {
             Expr *x = new_expr(EX_INDEX, e->line, e->col);
             x->index.obj = e;
             x->index.idx = idx;
+            e = x;
+        } else if (check(TK_DOT)) {
+            next(); /* . */
+            Token *fname = expect(TK_IDENT, "a field name after '.'");
+            Expr *x = new_expr(EX_FIELD, e->line, e->col);
+            x->field.obj = e;
+            x->field.name = fname->name;
             e = x;
         } else {
             return e;
@@ -597,45 +614,28 @@ static Stmt *parse_stmt(void) {
             (void)eq;
             return s;
         }
-        if (peek_at(1)->kind == TK_LBRACKET) {
-            /* Either `xs[i] = v;` or an expression statement that starts
-             * with an index. Parse the expression first to find out. */
-            Expr *target = parse_expr();
-            if (check(TK_ASSIGN)) {
-                next(); /* = */
-                if (target->kind != EX_INDEX) {
-                    fatal_at(P.src, t->line, t->col, "invalid assignment target");
-                }
-                Stmt *s = new_stmt(ST_ASSIGN, t->line, t->col);
-                s->assign.name = NULL;
-                s->assign.target = target;
-                s->assign.value = parse_expr();
-                expect(TK_SEMI, "';' after the assignment");
-                return s;
-            }
-            if (!check(TK_SEMI)) {
-                const char *new_word = retired_keyword(t->name);
-                if (new_word) {
-                    fatal_at(P.src, t->line, t->col,
-                             "'%s' is not a Duck keyword anymore - use '%s' instead",
-                             t->name, new_word);
-                }
-            }
-            expect(TK_SEMI, "';' after the expression");
-            Stmt *s = new_stmt(ST_EXPR, target->line, target->col);
-            s->expr = target;
-            return s;
-        }
         break; /* fall through to expression statement */
     default:
         break;
     }
 
-    /* An expression statement: if it does not end with ';' and it started
-     * with one of the retired keywords, give a targeted hint instead of the
-     * generic "expected ';'" message. */
+    /* An expression statement: `xs[i] = v;` and `p.field = v;` are assignment
+     * statements whose target comes out of the expression itself. If the
+     * expression does not end with ';' and it started with one of the retired
+     * keywords, give a targeted hint instead of the generic "expected ';'"
+     * message. */
     Token *start = peek();
     Expr *e = parse_expr();
+    if (accept(TK_ASSIGN)) {
+        if (e->kind != EX_INDEX && e->kind != EX_FIELD) {
+            fatal_at(P.src, e->line, e->col, "invalid assignment target");
+        }
+        Stmt *s = new_stmt(ST_ASSIGN, e->line, e->col);
+        s->assign.target = e;
+        s->assign.value = parse_expr();
+        expect(TK_SEMI, "';' after the assignment");
+        return s;
+    }
     if (!check(TK_SEMI) && start->kind == TK_IDENT) {
         const char *new_word = retired_keyword(start->name);
         if (new_word) {
@@ -712,17 +712,72 @@ static Const *parse_const(void) {
     return c;
 }
 
+/* `struct Name { field: Type, ... };` - fields are comma-separated and a
+ * trailing comma is allowed. The declaration itself was already registered
+ * by the pre-pass in parse(); this only fills in the fields. */
+static StructDecl *parse_struct(void) {
+    Token *kw = expect(TK_STRUCT, "'struct' to start a struct declaration");
+    Token *name = expect(TK_IDENT, "a struct name after 'struct'");
+    StructDecl *sd = struct_type_lookup(name->name);
+    if (!sd) {
+        fatal_at(P.src, name->line, name->col, "unknown struct '%s'", name->name);
+    }
+    sd->line = kw->line;
+    sd->col = kw->col;
+
+    expect(TK_LBRACE, "'{' to open the struct body");
+
+    Vec fields = {0};
+    while (!check(TK_RBRACE) && !check(TK_EOF)) {
+        Token *fname = expect(TK_IDENT, "a field name");
+        expect(TK_COLON, "':' after the field name");
+        Type ft = parse_type();
+
+        Field *f = arena_alloc(sizeof(Field));
+        memset(f, 0, sizeof(*f));
+        f->name = fname->name;
+        f->type = ft;
+        f->line = fname->line;
+        f->col = fname->col;
+        vec_push(&fields, f);
+        if (!accept(TK_COMMA)) break;
+    }
+    expect(TK_RBRACE, "'}' to close the struct body");
+
+    sd->nfields = fields.len;
+    sd->fields = vec_finish(&fields, sizeof(Field *));
+    return sd;
+}
+
 Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     P.src = src;
     P.toks = toks;
     P.ntoks = ntoks;
     P.pos = 0;
 
+    /* Pre-pass: intern every struct name before parsing anything, so that a
+     * struct can be used before its declaration and a repeated name is
+     * reported at the second declaration. */
+    for (int i = 0; i + 1 < ntoks; i++) {
+        if (toks[i].kind == TK_STRUCT && toks[i + 1].kind == TK_IDENT) {
+            if (struct_type_lookup(toks[i + 1].name)) {
+                fatal_at(src, toks[i + 1].line, toks[i + 1].col,
+                         "duplicate struct '%s'", toks[i + 1].name);
+            }
+            struct_type_intern(toks[i + 1].name);
+        }
+    }
+
     Vec funcs = {0};
     Vec consts = {0};
+    Vec structs = {0};
     while (!check(TK_EOF)) {
         if (check(TK_CONST)) {
             vec_push(&consts, parse_const());
+            continue;
+        }
+        if (check(TK_STRUCT)) {
+            vec_push(&structs, parse_struct());
             continue;
         }
         if (!check(TK_FN)) {
@@ -737,7 +792,7 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
             char got[64];
             describe(peek(), got, sizeof(got));
             fatal_at(src, peek()->line, peek()->col,
-                     "expected a top-level declaration ('fn' or 'const'), found %s", got);
+                     "expected a top-level declaration ('fn', 'struct' or 'const'), found %s", got);
         }
         vec_push(&funcs, parse_func());
     }
@@ -747,6 +802,8 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     prog->funcs = vec_finish(&funcs, sizeof(Func *));
     prog->nconsts = consts.len;
     prog->consts = vec_finish(&consts, sizeof(Const *));
+    prog->nstructs = structs.len;
+    prog->structs = vec_finish(&structs, sizeof(StructDecl *));
     if (!prog->funcs) {
         fatal_at(src, 1, 1, "expected at least one function declaration");
     }

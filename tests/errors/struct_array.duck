@@ -1,0 +1,7 @@
+struct Point { x: int }
+fn main() -> int {
+    let p = Point(1);
+    let xs = [p];
+    serve(len(xs));
+    send 0;
+}

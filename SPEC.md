@@ -1,17 +1,18 @@
 # Duck Language Specification
 
-**Version 0.4.0** — this document defines the syntax and semantics accepted by
+**Version 0.5.0** — this document defines the syntax and semantics accepted by
 `duckc`, the Duck compiler.
 
 Duck is a small, statically typed, imperative language. It compiles straight to
 x86-64 machine code (Linux, System V AMD64 ABI) with no runtime and no C
 library behind it.
 
-Its keywords are the English spellings `fn`, `const`, `let`, `if`, `else`,
-`while`, `for`, `in`, `send`, `break` and `continue`, plus `true`/`false` and
-the type names `int`, `float`, `bool` and `string`. The output builtin is
-`serve`. The Duck-era words `wing`, `nest`, `when` and `otherwise` (canonical
-only in v0.2.0) and the older `return` and `print` are ordinary identifiers now.
+Its keywords are the English spellings `fn`, `struct`, `const`, `let`, `if`,
+`else`, `while`, `for`, `in`, `send`, `break` and `continue`, plus
+`true`/`false` and the type names `int`, `float`, `bool` and `string`. The
+output builtin is `serve`. The Duck-era words `wing`, `nest`, `when` and
+`otherwise` (canonical only in v0.2.0) and the older `return` and `print` are
+ordinary identifiers now.
 
 ---
 
@@ -68,12 +69,12 @@ Identifiers are case sensitive.
 
 | | | |
 |---|---|---|
-| `fn` | `const` | `let` |
-| `if` | `else` | `while` |
-| `for` | `in` | `send` |
-| `break` | `continue` | `true` |
-| `false` | `int` | `float` |
-| `bool` | `string` | |
+| `fn` | `struct` | `const` |
+| `let` | `if` | `else` |
+| `while` | `for` | `in` |
+| `send` | `break` | `continue` |
+| `true` | `false` | `int` |
+| `float` | `bool` | `string` |
 
 The retired words `wing`, `nest`, `when`, `otherwise`, `return` and `print`
 are **not** keywords: they parse as ordinary identifiers, so `wingman` or a
@@ -125,6 +126,7 @@ escape         := '\n' | '\t' | '\r' | '\\' | '\"'
 | `bool` | boolean | `true`, `false` |
 | `string` | pointer to NUL-terminated bytes | `"duck"` |
 | `[int]`, `[float]`, `[bool]`, `[string]` | pointer to a heap block `[count][elems…]` | `[1, 2, 3]`, `[]` (with annotation) |
+| *struct* (`Point`, …) | pointer to a heap block of 8-byte field slots | `Point(1, 2)` (constructor) |
 | `void` | no value | only produced by calls; cannot be stored |
 
 There are **no implicit conversions**: `1 + true` is an error, not a `2`, and
@@ -168,12 +170,50 @@ let fs: [float] = [];      // empty, only with an annotation
 
 `const` declarations may also be of any of the scalar types (see §4).
 
+### 3.2 Structs
+
+A `struct` declaration introduces a **nominal** record type:
+
+```duck
+struct Point {
+    x: int,
+    y: int,
+}
+```
+
+* **Fields** are `name: Type` pairs separated by commas (a trailing comma is
+  allowed). Every field type is allowed — including other structs and arrays —
+  but a struct may not contain itself through a *value*: fields are references,
+  so `struct Node { next: Node }` parses and only fails if you try to build an
+  infinitely deep value (there is no `null` yet).
+* **Declaration order is free**: a struct may be used before the line that
+  declares it, exactly like functions and constants.
+* **Construction** is positional and complete: `Point(1, 2)` must pass exactly
+  one argument per field, each with the field's type.
+* **Field access** reads with `p.x` and writes with `p.x = v`. Field names are
+  ordinary identifiers (not keywords), looked up on the static type of the
+  receiver: an unknown field or a receiver that is not a struct is a compile
+  error.
+* **Structs are references.** `let q = p` makes `q` point at the same block, so
+  `q.x = 7` is visible through `p` (like arrays). There is no copy operation.
+* **Comparison is rejected**: `p == q` and `p != q` are errors — compare the
+  fields you care about.
+* **`serve` cannot print a struct** (there is no record syntax yet); pass the
+  fields one by one.
+* **Arrays of structs** (`[Point]`) are not supported yet, like nested arrays.
+* Values of struct type may be parameters, `let` initializers (with a
+  `Point` annotation) and return values; they travel as plain pointers.
+
+`Point` used as a value (without parentheses) is an error that names the fix:
+`'Point' is a struct type - construct a value with Point(...)`.
+
 ---
 
 ## 4. Program structure
 
-A program is a sequence of top-level declarations: **functions** (`fn`) and
-**constants** (`const`). There are no mutable globals: **the entry point is**
+A program is a sequence of top-level declarations: **functions** (`fn`),
+**structs** (`struct`) and **constants** (`const`). There are no mutable
+globals: **the entry point is**
 
 ```duck
 fn main() -> int { ... }
@@ -194,8 +234,8 @@ const RATE = 0.25;
 * The initializer must be a **single literal** (`int`, `float`, `bool` or
   `string`) — no expressions and no other constants in it (v0.4.0).
 * The name must be a plain identifier: it may not start with `_` or `duck_`,
-  may not be a builtin, and may not collide with a function or another
-  constant.
+  may not be a builtin, and may not collide with a function, a struct or
+  another constant.
 * Declaration order does not matter: a constant may be used before its
   declaration in the file.
 * A constant occupies no storage — every reference is replaced by its literal
@@ -239,12 +279,15 @@ allowed (including shadowing a `const`).
 ```duck
 x = x + 1;
 xs[0] = 42;          // element of an array
+p.x = 42;            // field of a struct
 ```
 
 The variable must already exist and the value type must match exactly.
 Assignment is a statement, not an expression. An element assignment requires
 an **array** on the left (`s[0] = "x"` is an error: strings are immutable);
-the index must be an `int` and is bounds-checked at run time.
+the index must be an `int` and is bounds-checked at run time. A field
+assignment requires a **struct** on the left and the field's exact type on the
+right; the receiver is evaluated once.
 
 ### 5.3 Expression statement
 
@@ -345,7 +388,7 @@ From lowest to highest binding:
 | 9 | `+` `-` | left |
 | 10 | `*` `/` `%` | left |
 | 11 | unary `-` `!` `~` | right (prefix) |
-| 12 | `f(args)` `(...)` `a[i]` | — |
+| 12 | `f(args)` `(...)` `a[i]` `a.b` | — |
 
 The precedence follows C (there are no ternary or comma operators). `&&` and
 `||` **short-circuit**: the right operand is not evaluated when the result is
@@ -370,7 +413,9 @@ mean.
 | `~a` | `int` | `int` |
 | `!a` | `bool` | `bool` |
 | `a[i]` | `i` is `int`; `a` is an array (element type) or a `string` (`string`) | element type |
+| `a.b` | `a` is a value of a struct type with field `b` | field type |
 | `a == b` on arrays | — | **error** (compare elements) |
+| `a == b` on structs | — | **error** (compare fields) |
 
 Strings are compared **by content**, not by address. Mixing operands of
 different types in `+` (for example `"n = " + 42`) is an error: there is no
@@ -416,11 +461,14 @@ of a `for` range are evaluated once, left to right, before the loop starts.
 
 ```duck
 add(1, 2)
+Point(1, 2)         // struct constructor
 ```
 
-The callee must be a function name. Arity and argument types must match
-exactly. Any call whose function returns `void` is a valid statement but not a
-value.
+The callee must be a function name or a **struct name**. A struct call is a
+constructor: it must pass exactly one argument per field, each with the
+field's type, and it evaluates to a fresh value (§3.2). Any other call's
+arity and argument types must match exactly. A call whose function returns
+`void` is a valid statement but not a value.
 
 ---
 
@@ -428,7 +476,7 @@ value.
 
 | Call | Result | Description |
 |---|---|---|
-| `serve(value)` | `void` | Writes `value` (`int`, `float`, `bool` or `string`) to standard output followed by a newline, using raw `write` syscalls (unbuffered). Arrays and `void` are rejected. |
+| `serve(value)` | `void` | Writes `value` (`int`, `float`, `bool` or `string`) to standard output followed by a newline, using raw `write` syscalls (unbuffered). Arrays, structs and `void` are rejected. |
 | `len(x)` | `int` | Length of a string in bytes, or the number of elements of an array. |
 | `str(value)` | `string` | Decimal text of an `int` (`str(-7) == "-7"`), the float form of a `float` (§6.3), or `"true"` / `"false"` of a `bool`. |
 | `input_line()` | `string` | Reads one line from standard input and returns it without the trailing newline. At EOF returns `""`. Reads at most 4095 bytes per call; a longer line continues on the next call. |
@@ -438,21 +486,25 @@ value.
 
 `str` returns a fresh string on the heap (except the constant `true`/`false`,
 which points at static memory), so it can be concatenated freely. Builtins
-cannot be redefined as user functions or constants.
+cannot be redefined as user functions, structs or constants.
 
 ---
 
 ## 8. Grammar (EBNF)
 
 ```ebnf
-program      := { func-decl | const-decl } ;
+program      := { func-decl | struct-decl | const-decl } ;
 
 func-decl    := "fn" IDENT "(" [ param-list ] ")" [ "->" type ] block ;
 param-list   := param { "," param } ;
 param        := IDENT ":" type ;
+struct-decl  := "struct" IDENT "{" [ field-list ] "}" ;
+field-list   := field { "," field } [ "," ] ;   (* trailing comma allowed *)
+field        := IDENT ":" type ;
 const-decl   := "const" IDENT "=" literal ";" ;
 type         := "int" | "float" | "bool" | "string"
-              | "[" type "]" ;                (* one level: [int] etc. *)
+              | "[" type "]"                (* one level: [int] etc. *)
+              | IDENT ;                     (* a struct name *)
 
 literal      := INT | FLOAT | STRING | "true" | "false" ;
 
@@ -471,7 +523,7 @@ stmt         := let-stmt
 
 let-stmt     := "let" IDENT [ ":" type ] "=" expr ";" ;
 assign-stmt  := IDENT "=" expr ";"
-              | IDENT "[" expr "]" "=" expr ";" ;
+              | expr "=" expr ";" ;  (* target must end in a[i] or a.b *)
 if-stmt      := "if" expr block [ "else" ( if-stmt | block ) ] ;
 while-stmt   := "while" expr block ;
 for-stmt     := "for" IDENT "in" expr ".." expr block ;
@@ -491,7 +543,7 @@ shift-expr   := add-expr { ( "<<" | ">>" ) add-expr } ;
 add-expr     := mul-expr { ( "+" | "-" ) mul-expr } ;
 mul-expr     := unary { ( "*" | "/" | "%" ) unary } ;
 unary        := ( "-" | "!" | "~" ) unary | postfix ;
-postfix      := primary { "(" [ args ] ")" | "[" expr "]" } ;
+postfix      := primary { "(" [ args ] ")" | "[" expr "]" | "." IDENT } ;
 args         := expr { "," expr } ;
 primary      := INT | FLOAT | STRING | "true" | "false" | IDENT
               | array-literal | "(" expr ")" ;
@@ -505,12 +557,15 @@ array-literal := "[" [ expr { "," expr } ] "]" ;
 * All keywords in §2.4.
 * The builtin function names `serve`, `len`, `str`, `input_line`, `float`,
   `int` and `push` (they cannot be redefined).
-* Function names starting with `_`.
-* Function names starting with `duck_` (the generated runtime owns
-  `duck_serve_int`, `duck_serve_bool`, `duck_serve_str`, `duck_serve_float`,
-  `duck_streq`, `duck_strlen`, `duck_alloc`, `duck_concat`, `duck_str_int`,
-  `duck_str_bool`, `duck_str_float`, `duck_fmt_float`, `duck_str_at`,
-  `duck_push`, `duck_oob`, `duck_input` and the data symbol `duck_brk`).
+* Function, constant, struct and field names starting with `_`.
+* Function, constant, struct and field names starting with `duck_` (the
+  generated runtime owns `duck_serve_int`, `duck_serve_bool`, `duck_serve_str`,
+  `duck_serve_float`, `duck_streq`, `duck_strlen`, `duck_alloc`, `duck_concat`,
+  `duck_str_int`, `duck_str_bool`, `duck_str_float`, `duck_fmt_float`,
+  `duck_str_at`, `duck_push`, `duck_oob`, `duck_input` and the data symbol
+  `duck_brk`).
+* Function and struct names may not collide with each other or with a
+  constant; field names live in their own namespace (accessed through `.`).
 
 Local variables and parameters have no such restriction.
 

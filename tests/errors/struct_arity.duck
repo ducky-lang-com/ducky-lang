@@ -1,0 +1,6 @@
+struct Point { x: int, y: int }
+fn main() -> int {
+    let p = Point(1);
+    serve(p.x);
+    send 0;
+}

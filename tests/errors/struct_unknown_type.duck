@@ -1,0 +1,4 @@
+fn main() -> int {
+    let p: Nope = 1;
+    send 0;
+}

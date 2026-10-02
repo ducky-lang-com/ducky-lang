@@ -52,10 +52,10 @@ static struct {
     const char *word;
     TokenKind kind;
 } keywords[] = {
-    {"fn", TK_FN},         {"const", TK_CONST},   {"let", TK_LET},
-    {"if", TK_IF},         {"else", TK_ELSE},     {"while", TK_WHILE},
-    {"for", TK_FOR},       {"in", TK_IN},         {"send", TK_RETURN},
-    {"break", TK_BREAK},   {"continue", TK_CONTINUE},
+    {"fn", TK_FN},         {"struct", TK_STRUCT}, {"const", TK_CONST},
+    {"let", TK_LET},       {"if", TK_IF},         {"else", TK_ELSE},
+    {"while", TK_WHILE},   {"for", TK_FOR},       {"in", TK_IN},
+    {"send", TK_RETURN},   {"break", TK_BREAK},   {"continue", TK_CONTINUE},
     {"true", TK_TRUE},     {"false", TK_FALSE},   {"int", TK_KW_INT},
     {"float", TK_KW_FLOAT},{"bool", TK_KW_BOOL},  {"string", TK_KW_STRING},
 };
@@ -359,7 +359,7 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
                 advance(&lx);
                 t = make_token(&lx, TK_DOTDOT, start, line, col);
             } else {
-                fatal_at(src, line, col, "unexpected character '.' (did you mean '..'?)");
+                t = make_token(&lx, TK_DOT, start, line, col);
             }
             break;
         default:
@@ -377,6 +377,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_FLOAT:     return "float";
     case TK_STRING:    return "string";
     case TK_FN:        return "fn";
+    case TK_STRUCT:    return "struct";
     case TK_CONST:     return "const";
     case TK_LET:       return "let";
     case TK_IF:        return "if";
@@ -403,6 +404,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_SEMI:      return ";";
     case TK_COLON:     return ":";
     case TK_ARROW:     return "->";
+    case TK_DOT:       return ".";
     case TK_DOTDOT:    return "..";
     case TK_PLUS:      return "+";
     case TK_MINUS:     return "-";

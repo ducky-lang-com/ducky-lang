@@ -1,0 +1,90 @@
+struct Point { x: int, y: int }
+
+struct Person {
+    name: string,
+    age: int,
+    active: bool,
+}
+
+struct Wrapper { inner: Point, label: string }
+
+struct Pair { a: float, b: float }
+
+struct Empty { }
+
+fn scaled(p: Point, k: int) -> Point {
+    send Point(p.x * k, p.y * k);
+}
+
+fn bump(w: Wrapper) -> int {
+    w.inner.x = w.inner.x + 1;
+    send w.inner.x;
+}
+
+fn many(a: int, b: int, c: int, d: int, e: int, f: int, g: Point) -> int {
+    send a + b + c + d + e + f + g.x;
+}
+
+fn main() -> int {
+    // construction and field reads
+    let p = Point(3, 4);
+    serve(p.x);
+    serve(p.y);
+
+    // field assignment
+    p.x = 10;
+    serve(p.x);
+
+    // values are references: two names can share one struct
+    let alias = p;
+    alias.y = 99;
+    serve(p.y);
+
+    // explicit annotation
+    let annotated: Point = Point(1, 2);
+    serve(annotated.x + annotated.y);
+
+    // structs returned from functions
+    let s = scaled(p, 2);
+    serve(s.x);
+    serve(scaled(Point(5, 6), 3).y);
+
+    // mixed field types
+    let duck = Person("duck", 1, true);
+    serve(duck.name);
+    serve(duck.age);
+    serve(duck.active);
+
+    // float fields keep their 64-bit pattern
+    let fp = Pair(1.5, 2.5);
+    serve(fp.a + fp.b);
+    fp.b = 0.25;
+    serve(fp.b);
+
+    // struct in a struct, mutated through a function
+    let w = Wrapper(Point(0, 0), "box");
+    serve(bump(w));
+    serve(w.inner.x);
+    w.inner.y = 7;
+    serve(w.inner.y);
+    serve(w.label);
+
+    // structs inside control flow
+    let i = 0;
+    while i < 3 {
+        w.inner.x = w.inner.x + 10;
+        i = i + 1;
+    }
+    serve(w.inner.x);
+    if w.inner.x == 31 {
+        serve(w.inner.x);
+    }
+
+    // a struct as the 7th argument travels on the stack
+    serve(many(1, 2, 3, 4, 5, 6, p));
+
+    // an empty struct is legal (it just has no fields)
+    let e = Empty();
+    serve(p.x);
+    send 0;
+}
