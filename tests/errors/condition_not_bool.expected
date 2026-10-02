@@ -1,1 +1,1 @@
-the condition of 'when' must have type 'bool', found 'int'
+the condition of 'if' must have type 'bool', found 'int'

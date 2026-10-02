@@ -1,10 +1,10 @@
-wing f(x: int) -> int {
-    when x > 0 {
+fn f(x: int) -> int {
+    if x > 0 {
         send 1;
     }
 }
 
-wing main() -> int {
+fn main() -> int {
     serve(f(1));
     send 0;
 }

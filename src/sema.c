@@ -24,6 +24,7 @@ static Program *g_prog;
 static Func *g_fn;
 static Scope *g_scope;
 static int g_slots; /* parameters + locals declared so far */
+static int g_loops; /* loop nesting depth, for break/continue checks */
 
 static void err(int line, int col, const char *fmt, ...) {
     char buf[512];
@@ -43,6 +44,11 @@ static Func *find_func(Program *prog, const char *name) {
         if (strcmp(prog->funcs[i]->name, name) == 0) return prog->funcs[i];
     }
     return NULL;
+}
+
+static int is_builtin_name(const char *name) {
+    return strcmp(name, "serve") == 0 || strcmp(name, "len") == 0 ||
+           strcmp(name, "str") == 0 || strcmp(name, "input_line") == 0;
 }
 
 static void push_scope(void) {
@@ -73,6 +79,13 @@ static Var *find_var_current(const char *name) {
     return NULL;
 }
 
+/* Reserve the next 8-byte stack slot (no name: used for hidden storage
+ * such as the end bound of a `for` range). */
+static int alloc_slot(void) {
+    g_slots++;
+    return -8 * g_slots;
+}
+
 static Var *declare_var(const char *name, Type type, int line, int col) {
     if (find_var_current(name)) {
         err(line, col, "redefinition of '%s' in this scope", name);
@@ -80,8 +93,7 @@ static Var *declare_var(const char *name, Type type, int line, int col) {
     Var *v = arena_alloc(sizeof(Var));
     v->name = name;
     v->type = type;
-    g_slots++;
-    v->offset = -8 * g_slots;
+    v->offset = alloc_slot();
     v->next = g_scope->vars;
     g_scope->vars = v;
     return v;
@@ -138,9 +150,10 @@ static Type check_expr(Expr *e) {
 
     case EX_UNARY: {
         Type t = check_expr(e->unary.operand);
-        if (e->unary.op == UOP_NEG) {
+        if (e->unary.op == UOP_NEG || e->unary.op == UOP_BITNOT) {
             if (t != TY_INT) {
-                err(e->line, e->col, "unary '-' requires 'int', found '%s'", type_name(t));
+                err(e->line, e->col, "unary '%s' requires 'int', found '%s'",
+                    unary_op_name(e->unary.op), type_name(t));
             }
             return e->type = TY_INT;
         }
@@ -165,10 +178,37 @@ static Type check_expr(Expr *e) {
             return e->type = TY_BOOL;
 
         case BOP_ADD:
+            /* '+' adds two ints or concatenates two strings; nothing is
+             * converted implicitly. */
+            if (l == TY_STRING || r == TY_STRING) {
+                if (l != TY_STRING || r != TY_STRING) {
+                    err(e->line, e->col,
+                        "operator '+' requires two 'string' values to concatenate or two 'int' values to add, found '%s' and '%s'",
+                        type_name(l), type_name(r));
+                }
+                return e->type = TY_STRING;
+            }
+            if (l != TY_INT || r != TY_INT) {
+                err(e->line, e->col, "operator '+' requires 'int' operands, found '%s' and '%s'",
+                    type_name(l), type_name(r));
+            }
+            return e->type = TY_INT;
+
         case BOP_SUB:
         case BOP_MUL:
         case BOP_DIV:
         case BOP_MOD:
+        case BOP_BITAND:
+        case BOP_BITOR:
+        case BOP_XOR:
+        case BOP_SHL:
+        case BOP_SHR:
+            if (l != TY_INT || r != TY_INT) {
+                err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
+                    binary_op_name(op), type_name(l), type_name(r));
+            }
+            return e->type = TY_INT;
+
         case BOP_LT:
         case BOP_LE:
         case BOP_GT:
@@ -177,10 +217,7 @@ static Type check_expr(Expr *e) {
                 err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
                     binary_op_name(op), type_name(l), type_name(r));
             }
-            return e->type = (op == BOP_ADD || op == BOP_SUB || op == BOP_MUL ||
-                              op == BOP_DIV || op == BOP_MOD)
-                                 ? TY_INT
-                                 : TY_BOOL;
+            return e->type = TY_BOOL;
 
         case BOP_EQ:
         case BOP_NE:
@@ -206,8 +243,45 @@ static Type check_expr(Expr *e) {
             }
             Type t = check_expr(e->call.args[0]);
             if (t == TY_VOID) err(e->line, e->col, "cannot pass a value of type 'void' to serve()");
-            e->call.builtin = 1;
+            e->call.builtin = BUILTIN_SERVE;
             return e->type = TY_VOID;
+        }
+
+        if (strcmp(name, "len") == 0) {
+            if (e->call.nargs != 1) {
+                err(e->line, e->col, "len() expects exactly 1 argument, found %d",
+                    e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_STRING) {
+                err(e->call.args[0]->line, e->call.args[0]->col,
+                    "len() expects a 'string', found '%s'", type_name(t));
+            }
+            e->call.builtin = BUILTIN_LEN;
+            return e->type = TY_INT;
+        }
+
+        if (strcmp(name, "str") == 0) {
+            if (e->call.nargs != 1) {
+                err(e->line, e->col, "str() expects exactly 1 argument, found %d",
+                    e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_INT && t != TY_BOOL) {
+                err(e->call.args[0]->line, e->call.args[0]->col,
+                    "str() expects an 'int' or a 'bool', found '%s'", type_name(t));
+            }
+            e->call.builtin = BUILTIN_STR;
+            return e->type = TY_STRING;
+        }
+
+        if (strcmp(name, "input_line") == 0) {
+            if (e->call.nargs != 0) {
+                err(e->line, e->col, "input_line() expects no arguments, found %d",
+                    e->call.nargs);
+            }
+            e->call.builtin = BUILTIN_INPUT;
+            return e->type = TY_STRING;
         }
 
         /* Resolved against the global function table collected in analyze(). */
@@ -293,7 +367,7 @@ static void check_stmt(Stmt *s) {
         Type t = check_expr(s->ifs.cond);
         if (t != TY_BOOL) {
             err(s->ifs.cond->line, s->ifs.cond->col,
-                "the condition of 'when' must have type 'bool', found '%s'", type_name(t));
+                "the condition of 'if' must have type 'bool', found '%s'", type_name(t));
         }
         check_block(s->ifs.then_block);
         if (s->ifs.else_block) check_block(s->ifs.else_block);
@@ -306,9 +380,45 @@ static void check_stmt(Stmt *s) {
             err(s->whiles.cond->line, s->whiles.cond->col,
                 "the condition of 'while' must have type 'bool', found '%s'", type_name(t));
         }
+        g_loops++;
         check_block(s->whiles.body);
+        g_loops--;
         break;
     }
+
+    case ST_FOR: {
+        Type st = check_expr(s->fors.start);
+        if (st != TY_INT) {
+            err(s->fors.start->line, s->fors.start->col,
+                "the start of a 'for' range must be 'int', found '%s'", type_name(st));
+        }
+        Type en = check_expr(s->fors.end);
+        if (en != TY_INT) {
+            err(s->fors.end->line, s->fors.end->col,
+                "the end of a 'for' range must be 'int', found '%s'", type_name(en));
+        }
+        s->fors.end_offset = alloc_slot(); /* hidden slot holding the range end */
+        g_loops++;
+        push_scope();
+        Var *loop = declare_var(s->fors.var_name, TY_INT, s->line, s->col);
+        s->fors.var_offset = loop->offset;
+        check_block(s->fors.body);
+        pop_scope();
+        g_loops--;
+        break;
+    }
+
+    case ST_BREAK:
+        if (!g_loops) {
+            err(s->line, s->col, "'break' can only be used inside a loop");
+        }
+        break;
+
+    case ST_CONTINUE:
+        if (!g_loops) {
+            err(s->line, s->col, "'continue' can only be used inside a loop");
+        }
+        break;
 
     case ST_RETURN: {
         if (g_fn->ret == TY_VOID) {
@@ -342,6 +452,7 @@ static void check_func(Func *f) {
     g_fn = f;
     g_scope = NULL;
     g_slots = 0;
+    g_loops = 0;
 
     push_scope();
     for (int i = 0; i < f->nparams; i++) {
@@ -373,8 +484,8 @@ void analyze(const SourceFile *src, Program *prog) {
         if (f->name[0] == '_' || starts_with(f->name, "duck_")) {
             err(f->line, f->col, "function name '%s' is reserved", f->name);
         }
-        if (strcmp(f->name, "serve") == 0) {
-            err(f->line, f->col, "'serve' is a builtin function and cannot be redefined");
+        if (is_builtin_name(f->name)) {
+            err(f->line, f->col, "'%s' is a builtin function and cannot be redefined", f->name);
         }
         for (int j = 0; j < i; j++) {
             if (strcmp(prog->funcs[j]->name, f->name) == 0) {
@@ -393,10 +504,10 @@ void analyze(const SourceFile *src, Program *prog) {
 
     Func *entry = find_func(prog, "main");
     if (!entry) {
-        err(1, 1, "the program must define an entry point: 'wing main() -> int'");
+        err(1, 1, "the program must define an entry point: 'fn main() -> int'");
     }
     if (entry->nparams != 0 || entry->ret != TY_INT) {
-        err(entry->line, entry->col, "the entry point must be declared as 'wing main() -> int'");
+        err(entry->line, entry->col, "the entry point must be declared as 'fn main() -> int'");
     }
 
     /* Pass 2: check every body. */

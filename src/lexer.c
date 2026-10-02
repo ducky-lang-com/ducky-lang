@@ -52,8 +52,10 @@ static struct {
     const char *word;
     TokenKind kind;
 } keywords[] = {
-    {"wing", TK_FN},       {"nest", TK_LET},      {"when", TK_IF},
-    {"otherwise", TK_ELSE}, {"while", TK_WHILE},  {"send", TK_RETURN},
+    {"fn", TK_FN},         {"let", TK_LET},       {"if", TK_IF},
+    {"else", TK_ELSE},     {"while", TK_WHILE},   {"for", TK_FOR},
+    {"in", TK_IN},         {"send", TK_RETURN},   {"break", TK_BREAK},
+    {"continue", TK_CONTINUE},
     {"true", TK_TRUE},     {"false", TK_FALSE},   {"int", TK_KW_INT},
     {"bool", TK_KW_BOOL},  {"string", TK_KW_STRING},
 };
@@ -275,6 +277,9 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
             if (lx.p < lx.end && *lx.p == '=') {
                 advance(&lx);
                 t = make_token(&lx, TK_LE, start, line, col);
+            } else if (lx.p < lx.end && *lx.p == '<') {
+                advance(&lx);
+                t = make_token(&lx, TK_SHL, start, line, col);
             } else {
                 t = make_token(&lx, TK_LT, start, line, col);
             }
@@ -283,6 +288,9 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
             if (lx.p < lx.end && *lx.p == '=') {
                 advance(&lx);
                 t = make_token(&lx, TK_GE, start, line, col);
+            } else if (lx.p < lx.end && *lx.p == '>') {
+                advance(&lx);
+                t = make_token(&lx, TK_SHR, start, line, col);
             } else {
                 t = make_token(&lx, TK_GT, start, line, col);
             }
@@ -292,7 +300,7 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
                 advance(&lx);
                 t = make_token(&lx, TK_AND, start, line, col);
             } else {
-                fatal_at(src, line, col, "unexpected character '&' (did you mean '&&'?)");
+                t = make_token(&lx, TK_BITAND, start, line, col);
             }
             break;
         case '|':
@@ -300,7 +308,21 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
                 advance(&lx);
                 t = make_token(&lx, TK_OR, start, line, col);
             } else {
-                fatal_at(src, line, col, "unexpected character '|' (did you mean '||'?)");
+                t = make_token(&lx, TK_BITOR, start, line, col);
+            }
+            break;
+        case '^':
+            t = make_token(&lx, TK_XOR, start, line, col);
+            break;
+        case '~':
+            t = make_token(&lx, TK_TILDE, start, line, col);
+            break;
+        case '.':
+            if (lx.p < lx.end && *lx.p == '.') {
+                advance(&lx);
+                t = make_token(&lx, TK_DOTDOT, start, line, col);
+            } else {
+                fatal_at(src, line, col, "unexpected character '.' (did you mean '..'?)");
             }
             break;
         default:
@@ -316,12 +338,16 @@ const char *token_kind_name(TokenKind k) {
     case TK_IDENT:     return "identifier";
     case TK_INT:       return "integer";
     case TK_STRING:    return "string";
-    case TK_FN:        return "wing";
-    case TK_LET:       return "nest";
-    case TK_IF:        return "when";
-    case TK_ELSE:      return "otherwise";
+    case TK_FN:        return "fn";
+    case TK_LET:       return "let";
+    case TK_IF:        return "if";
+    case TK_ELSE:      return "else";
     case TK_WHILE:     return "while";
+    case TK_FOR:       return "for";
+    case TK_IN:        return "in";
     case TK_RETURN:    return "send";
+    case TK_BREAK:     return "break";
+    case TK_CONTINUE:  return "continue";
     case TK_TRUE:      return "true";
     case TK_FALSE:     return "false";
     case TK_KW_INT:    return "int";
@@ -335,6 +361,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_SEMI:      return ";";
     case TK_COLON:     return ":";
     case TK_ARROW:     return "->";
+    case TK_DOTDOT:    return "..";
     case TK_PLUS:      return "+";
     case TK_MINUS:     return "-";
     case TK_STAR:      return "*";
@@ -350,6 +377,12 @@ const char *token_kind_name(TokenKind k) {
     case TK_AND:       return "&&";
     case TK_OR:        return "||";
     case TK_NOT:       return "!";
+    case TK_BITAND:    return "&";
+    case TK_BITOR:     return "|";
+    case TK_XOR:       return "^";
+    case TK_TILDE:     return "~";
+    case TK_SHL:       return "<<";
+    case TK_SHR:       return ">>";
     }
     return "?";
 }

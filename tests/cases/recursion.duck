@@ -1,26 +1,26 @@
 // recursion.duck - deep recursion and mutual recursion.
-wing is_even(n: int) -> bool {
-    when n == 0 {
+fn is_even(n: int) -> bool {
+    if n == 0 {
         send true;
     }
     send is_odd(n - 1);
 }
 
-wing is_odd(n: int) -> bool {
-    when n == 0 {
+fn is_odd(n: int) -> bool {
+    if n == 0 {
         send false;
     }
     send is_even(n - 1);
 }
 
-wing countdown(n: int) -> int {
-    when n == 0 {
+fn countdown(n: int) -> int {
+    if n == 0 {
         send 0;
     }
     send countdown(n - 1);
 }
 
-wing main() -> int {
+fn main() -> int {
     serve(countdown(1000));
     serve(is_even(10));
     serve(is_odd(10));

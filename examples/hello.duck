@@ -1,5 +1,5 @@
 // hello.duck - the classic first Duck program.
-wing main() -> int {
+fn main() -> int {
     serve("Hello, Duck!");
     send 0;
 }

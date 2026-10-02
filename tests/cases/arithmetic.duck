@@ -1,9 +1,9 @@
 // arithmetic.duck - operators, precedence and associativity.
-wing add(a: int, b: int) -> int {
+fn add(a: int, b: int) -> int {
     send a + b;
 }
 
-wing main() -> int {
+fn main() -> int {
     serve(7 + 3);
     serve(7 - 3);
     serve(7 * 3);

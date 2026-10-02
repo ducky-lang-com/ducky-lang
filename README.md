@@ -1,6 +1,6 @@
 # Duck (duck-lang)
 
-![Duck logo: an amber monoline D](editors/vscode/assets/icon.svg)
+![Duck logo: a solid amber D](editors/vscode/assets/icon.svg)
 
 A small, statically typed programming language that **compiles to native
 x86-64 machine code**. The compiler (`duckc`) is written in C11, emits AT&T
@@ -10,7 +10,7 @@ interpreter — they talk to the kernel with raw syscalls.
 
 ```duck
 // examples/hello.duck
-wing main() -> int {
+fn main() -> int {
     serve("Hello, Duck!");
     send 0;
 }
@@ -32,11 +32,13 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
-v0.2.0 — Duck-native keywords: functions are declared with `wing`, variables
-with `nest`, conditions with `when` / `otherwise`, values come back with
-`send`, and output goes through `serve`. The old English spellings (`fn`,
-`let`, `if`, `else`, `return`, `print`) are retired: they are ordinary
-identifiers now and are rejected with a hint when used as syntax. See
+v0.3.0 — the English keywords (`fn`, `let`, `if`, `else`) are canonical again,
+with `send` (return) and `serve` (output) kept from the Duck-native round, plus
+the M1 language features: `for i in a .. b` ranges with `break`/`continue`,
+bitwise operators (`& | ^ ~ << >>`), string concatenation with `+`, and the
+`len` / `str` / `input_line` builtins. The Duck-era words `wing`, `nest`,
+`when`, `otherwise` (and the older `return`, `print`) are ordinary identifiers
+now and are rejected with a hint when used as syntax. See
 [ROADMAP.md](ROADMAP.md) for the requirements this release covers and what
 comes next.
 
@@ -45,17 +47,20 @@ comes next.
 * **Static typing** with three types: `int` (64-bit), `bool`, `string`.
   No implicit conversions; every mismatch is a compile error with a caret
   diagnostic.
-* **Duck-native keywords**: `wing` (functions), `nest` (variables), `when` /
-  `otherwise` (conditions), `send` (returns), `serve` (output).
+* **Functions and variables** with `fn` / `let` (type inference or explicit
+  annotation), `send` for returns, `serve` for output.
+* **Control flow**: `if` / `else if` / `else`, `while`, `for i in a .. b`
+  ranges, `break` and `continue`, short-circuit `&&` / `||`.
+* **Operators** with C precedence: arithmetic, comparisons, logic, and bitwise
+  `& | ^ ~ << >>` (arithmetic `>>`), plus string concatenation with `+`.
+* **Strings**: literals with escapes, value equality (`==` compares contents),
+  `len()`, `str()` for numbers and booleans, `input_line()` for stdin.
 * **Functions** with any number of parameters (more than six use the stack,
   as the System V ABI prescribes), recursion and mutual recursion.
-* **Control flow**: `when` / `otherwise when` / `otherwise`, `while`,
-  short-circuit `&&` / `||`.
-* **Block scoping** with shadowing, `nest` declarations with type inference or
-  explicit annotations.
-* **String literals** with escapes and value equality (`==` compares contents).
+* **Block scoping** with shadowing.
 * **Freestanding output**: `_start` + syscalls, so binaries run without any
-  runtime installed.
+  runtime installed. Strings from `+` / `str` / `input_line` come from a bump
+  allocator over `brk` — still no libc.
 
 ## Installation
 
@@ -140,7 +145,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckc
-make test     # runs the test suite (30 tests)
+make test     # runs the test suite (42 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
@@ -183,8 +188,9 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
    is always 16-byte aligned at each `call`, and stack arguments land exactly
    where the ABI expects them.
 5. **Runtime** — emitted into every program: `_start`, `serve` support for
-   ints/bools/strings and string comparison, all implemented with the
-   `write` and `exit` syscalls.
+   ints/bools/strings, string comparison, concatenation, `str`, `input_line`
+   and a small `brk`-based allocator — all implemented with raw `write`,
+   `read`, `brk` and `exit` syscalls.
 
 ## Project layout
 
@@ -196,7 +202,7 @@ duck-lang/
 ├── editors/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
-├── SPEC.md            language specification v0.1.0
+├── SPEC.md            language specification v0.3.0
 ├── ROADMAP.md         requirements: delivered and planned
 ├── src/
 │   ├── common.{h,c}   arena allocator, file loading, diagnostics

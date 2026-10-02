@@ -67,7 +67,7 @@
     "function-definition": {
       "patterns": [
         {
-          "match": "\\b(wing)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.control.duck" },
             "2": { "name": "entity.name.function.duck" }
@@ -78,7 +78,7 @@
     "let-declaration": {
       "patterns": [
         {
-          "match": "\\b(nest)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.control.duck" },
             "2": { "name": "variable.other.duck" }
@@ -90,7 +90,7 @@
       "patterns": [
         {
           "name": "keyword.control.duck",
-          "match": "\\b(wing|nest|when|otherwise|while|send)\\b"
+          "match": "\\b(fn|let|if|else|while|for|in|send|break|continue)\\b"
         }
       ]
     },
@@ -114,7 +114,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.duck",
-          "match": "\\b(serve)(?=\\s*\\()"
+          "match": "\\b(serve|len|str|input_line)(?=\\s*\\()"
         }
       ]
     },
@@ -130,7 +130,7 @@
       "patterns": [
         {
           "name": "keyword.operator.duck",
-          "match": "->|==|!=|<=|>=|&&|\\|\\||[-+*/%!]"
+          "match": "->|==|!=|<=|>=|&&|\\|\\||<<|>>|\\.\\.|[-+*/%!&|^~]"
         }
       ]
     },

@@ -24,6 +24,14 @@ static int depth;        /* values currently pushed, known at compile time */
 static int label_id;     /* unique id for local labels */
 static const char *ret_label; /* epilogue label of the function being emitted */
 
+/* Innermost enclosing loop: where break/continue jump to. */
+typedef struct {
+    char break_label[32];
+    char continue_label[32];
+} LoopCtx;
+static LoopCtx loops[64];
+static int nloops;
+
 /* ---------- string constant pool ---------------------------------------- */
 
 typedef struct {
@@ -134,6 +142,17 @@ static void gen_binary(Expr *e) {
         return;
     }
 
+    /* String concatenation allocates through the runtime. */
+    if (op == BOP_ADD && e->binary.lhs->type == TY_STRING) {
+        gen_expr(e->binary.lhs);
+        push_rax();
+        gen_expr(e->binary.rhs);
+        pop_rdi(); /* left operand */
+        emit("    mov %%rax, %%rsi\n");
+        emit_call("duck_concat");
+        return;
+    }
+
     gen_expr(e->binary.lhs);
     push_rax();
     gen_expr(e->binary.rhs); /* right operand in %rax */
@@ -155,6 +174,22 @@ static void gen_binary(Expr *e) {
     case BOP_MOD:
         emit("    mov %%rax, %%rcx\n    mov %%rdi, %%rax\n    cqto\n    idiv %%rcx\n");
         emit("    mov %%rdx, %%rax\n");
+        break;
+    case BOP_BITAND:
+        emit("    and %%rax, %%rdi\n    mov %%rdi, %%rax\n");
+        break;
+    case BOP_BITOR:
+        emit("    or %%rax, %%rdi\n    mov %%rdi, %%rax\n");
+        break;
+    case BOP_XOR:
+        emit("    xor %%rax, %%rdi\n    mov %%rdi, %%rax\n");
+        break;
+    case BOP_SHL:
+        /* left operand in %rdi, shift count in %rax -> count to %cl */
+        emit("    mov %%rax, %%rcx\n    mov %%rdi, %%rax\n    shl %%cl, %%rax\n");
+        break;
+    case BOP_SHR:
+        emit("    mov %%rax, %%rcx\n    mov %%rdi, %%rax\n    sar %%cl, %%rax\n");
         break;
     case BOP_EQ:
     case BOP_NE:
@@ -179,16 +214,37 @@ static void gen_binary(Expr *e) {
 }
 
 static void gen_call(Expr *e) {
-    if (e->call.builtin) {
-        /* serve() passes its argument in a register, so the alignment
-         * padding can be applied right before the call. */
-        Expr *arg = e->call.args[0];
-        gen_expr(arg);
-        emit("    mov %%rax, %%rdi\n");
-        const char *rt = arg->type == TY_INT     ? "duck_serve_int"
-                         : arg->type == TY_BOOL  ? "duck_serve_bool"
-                                                 : "duck_serve_str";
-        emit_call(rt);
+    if (e->call.builtin != BUILTIN_NONE) {
+        switch (e->call.builtin) {
+        case BUILTIN_SERVE: {
+            /* serve() passes its argument in a register, so the alignment
+             * padding can be applied right before the call. */
+            Expr *arg = e->call.args[0];
+            gen_expr(arg);
+            emit("    mov %%rax, %%rdi\n");
+            const char *rt = arg->type == TY_INT     ? "duck_serve_int"
+                             : arg->type == TY_BOOL  ? "duck_serve_bool"
+                                                     : "duck_serve_str";
+            emit_call(rt);
+            break;
+        }
+        case BUILTIN_LEN:
+            gen_expr(e->call.args[0]);
+            emit("    mov %%rax, %%rdi\n");
+            emit_call("duck_strlen");
+            break;
+        case BUILTIN_STR:
+            gen_expr(e->call.args[0]);
+            emit("    mov %%rax, %%rdi\n");
+            emit_call(e->call.args[0]->type == TY_INT ? "duck_str_int"
+                                                       : "duck_str_bool");
+            break;
+        case BUILTIN_INPUT:
+            emit_call("duck_input");
+            break;
+        case BUILTIN_NONE:
+            break; /* unreachable (guarded above) */
+        }
         return;
     }
 
@@ -253,6 +309,8 @@ static void gen_expr(Expr *e) {
         gen_expr(e->unary.operand);
         if (e->unary.op == UOP_NEG) {
             emit("    neg %%rax\n");
+        } else if (e->unary.op == UOP_BITNOT) {
+            emit("    not %%rax\n");
         } else {
             emit("    test %%rax, %%rax\n    sete %%al\n    movzbl %%al, %%eax\n");
         }
@@ -310,14 +368,67 @@ static void gen_stmt(Stmt *s) {
 
     case ST_WHILE: {
         int id = new_label();
+        LoopCtx ctx;
+        snprintf(ctx.break_label, sizeof(ctx.break_label), ".Lend%d", id);
+        snprintf(ctx.continue_label, sizeof(ctx.continue_label), ".Lcond%d", id);
+        if (nloops >= (int)(sizeof(loops) / sizeof(loops[0]))) {
+            fatal("internal error: loops nested too deeply");
+        }
+        loops[nloops++] = ctx;
+
         emit(".Lcond%d:\n", id);
         gen_expr(s->whiles.cond);
         emit("    cmp $0, %%rax\n    je .Lend%d\n", id);
         gen_block(s->whiles.body);
         emit("    jmp .Lcond%d\n", id);
         emit(".Lend%d:\n", id);
+        nloops--;
         break;
     }
+
+    case ST_FOR: {
+        int id = new_label();
+        LoopCtx ctx;
+        snprintf(ctx.break_label, sizeof(ctx.break_label), ".Lend%d", id);
+        snprintf(ctx.continue_label, sizeof(ctx.continue_label), ".Lstep%d", id);
+        if (nloops >= (int)(sizeof(loops) / sizeof(loops[0]))) {
+            fatal("internal error: loops nested too deeply");
+        }
+        loops[nloops++] = ctx;
+
+        /* Both bounds are evaluated exactly once: the start lands in the
+         * loop variable, the end in a hidden slot. */
+        gen_expr(s->fors.start);
+        emit("    mov %%rax, %d(%%rbp)\n", s->fors.var_offset);
+        gen_expr(s->fors.end);
+        emit("    mov %%rax, %d(%%rbp)\n", s->fors.end_offset);
+
+        emit(".Lcond%d:\n", id);
+        emit("    mov %d(%%rbp), %%rax\n", s->fors.var_offset);
+        emit("    mov %d(%%rbp), %%rdi\n", s->fors.end_offset);
+        emit("    cmp %%rdi, %%rax\n");
+        emit("    jge .Lend%d\n", id);
+        gen_block(s->fors.body);
+
+        emit(".Lstep%d:\n", id);
+        emit("    mov %d(%%rbp), %%rax\n", s->fors.var_offset);
+        emit("    add $1, %%rax\n");
+        emit("    mov %%rax, %d(%%rbp)\n", s->fors.var_offset);
+        emit("    jmp .Lcond%d\n", id);
+        emit(".Lend%d:\n", id);
+        nloops--;
+        break;
+    }
+
+    case ST_BREAK:
+        if (nloops == 0) fatal("internal error: break outside of a loop");
+        emit("    jmp %s\n", loops[nloops - 1].break_label);
+        break;
+
+    case ST_CONTINUE:
+        if (nloops == 0) fatal("internal error: continue outside of a loop");
+        emit("    jmp %s\n", loops[nloops - 1].continue_label);
+        break;
 
     case ST_RETURN:
         if (s->value) gen_expr(s->value);
@@ -352,6 +463,7 @@ static void gen_func(Func *f, int index) {
     }
 
     depth = 0;
+    nloops = 0;
     gen_block(f->body);
 
     emit("%s:\n", ret);
@@ -473,6 +585,187 @@ static void emit_runtime(void) {
     emit(".Lse_no:\n");
     emit("    xor %%eax, %%eax\n");
     emit("    ret\n");
+
+    /* len(s) -> byte length of a string */
+    emit("\nduck_strlen:\n");
+    emit("    xor %%eax, %%eax\n");
+    emit(".Lsl_loop:\n");
+    emit("    cmpb $0, (%%rdi, %%rax)\n");
+    emit("    je .Lsl_done\n");
+    emit("    inc %%rax\n");
+    emit("    jmp .Lsl_loop\n");
+    emit(".Lsl_done:\n");
+    emit("    ret\n");
+
+    /* duck_alloc(size) -> fresh zero page memory from the program break.
+     * A bump allocator: memory is never freed (there is no garbage
+     * collector); on exhaustion the program stops with a clear message. */
+    emit("\nduck_alloc:\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    mov %%rdi, %%rbx\n");           /* rbx = size */
+    emit("    mov duck_brk(%%rip), %%rdi\n");
+    emit("    test %%rdi, %%rdi\n");
+    emit("    jne .La_base\n");
+    emit("    xor %%edi, %%edi\n");
+    emit("    mov $12, %%eax\n");             /* sys_brk(0) -> current break */
+    emit("    syscall\n");
+    emit("    mov %%rax, %%rdi\n");
+    emit(".La_base:\n");
+    emit("    mov %%rdi, %%r12\n");           /* r12 = block handed out */
+    emit("    lea 15(%%rdi, %%rbx), %%rdi\n");
+    emit("    and $-16, %%rdi\n");            /* round the new break up */
+    emit("    mov $12, %%eax\n");             /* sys_brk(new) */
+    emit("    syscall\n");
+    emit("    cmp %%rdi, %%rax\n");
+    emit("    jb .La_oom\n");                 /* kernel refused: out of memory */
+    emit("    mov %%rdi, duck_brk(%%rip)\n"); /* commit the bump pointer */
+    emit("    mov %%r12, %%rax\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
+    emit("    ret\n");
+    emit(".La_oom:\n");
+    emit("    lea .Loommsg(%%rip), %%rsi\n");
+    emit("    mov $20, %%edx\n");
+    emit("    mov $2, %%edi\n");
+    emit("    mov $1, %%eax\n");              /* sys_write(2, ...) */
+    emit("    syscall\n");
+    emit("    mov $127, %%edi\n");
+    emit("    mov $60, %%eax\n");             /* sys_exit(127) */
+    emit("    syscall\n");
+
+    /* duck_concat(left, right) -> newly allocated left+right */
+    emit("\nduck_concat:\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    push %%r13\n");
+    emit("    mov %%rdi, %%rbx\n");           /* left */
+    emit("    mov %%rsi, %%r12\n");           /* right */
+    emit("    call duck_strlen\n");           /* rdi is still left */
+    emit("    mov %%rax, %%r13\n");
+    emit("    mov %%r12, %%rdi\n");
+    emit("    call duck_strlen\n");
+    emit("    lea 1(%%r13, %%rax), %%rdi\n"); /* len(left)+len(right)+1 */
+    emit("    call duck_alloc\n");
+    emit("    mov %%rax, %%r8\n");            /* dst */
+    emit("    cld\n");
+    emit("    mov %%rbx, %%rsi\n");           /* copy left ... */
+    emit("    mov %%r8, %%rdi\n");
+    emit("    mov %%r13, %%rcx\n");
+    emit("    rep movsb\n");
+    emit("    mov %%r12, %%rdi\n");
+    emit("    call duck_strlen\n");           /* ... then right + its NUL */
+    emit("    mov %%rax, %%rcx\n");
+    emit("    inc %%rcx\n");
+    emit("    mov %%r12, %%rsi\n");
+    emit("    mov %%r8, %%rdi\n");
+    emit("    add %%r13, %%rdi\n");
+    emit("    rep movsb\n");
+    emit("    mov %%r8, %%rax\n");
+    emit("    pop %%r13\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
+    emit("    ret\n");
+
+    /* str(value: int) -> decimal representation on the heap */
+    emit("\nduck_str_int:\n");
+    emit("    push %%rbp\n");
+    emit("    push %%rbx\n");
+    emit("    mov %%rsp, %%rbp\n");
+    emit("    sub $40, %%rsp\n");             /* conversion buffer */
+    emit("    mov %%rdi, %%rax\n");
+    emit("    mov %%rbp, %%r8\n");            /* digits written downwards */
+    emit("    mov $10, %%r9\n");
+    emit("    xor %%r11, %%r11\n");           /* sign flag */
+    emit("    test %%rax, %%rax\n");
+    emit("    jns .Lti_pos\n");
+    emit("    mov $1, %%r11\n");
+    emit("    neg %%rax\n");
+    emit(".Lti_pos:\n");
+    emit(".Lti_loop:\n");
+    emit("    xor %%edx, %%edx\n");
+    emit("    div %%r9\n");
+    emit("    add $48, %%dl\n");
+    emit("    dec %%r8\n");
+    emit("    mov %%dl, (%%r8)\n");
+    emit("    test %%rax, %%rax\n");
+    emit("    jnz .Lti_loop\n");
+    emit("    test %%r11, %%r11\n");
+    emit("    jz .Lti_copy\n");
+    emit("    dec %%r8\n");
+    emit("    movb $45, (%%r8)\n");           /* '-' */
+    emit(".Lti_copy:\n");
+    emit("    mov %%rbp, %%rbx\n");
+    emit("    sub %%r8, %%rbx\n");            /* rbx = length */
+    emit("    lea 1(%%rbx), %%rdi\n");
+    emit("    push %%r8\n");                  /* src ... */
+    emit("    push %%r8\n");                  /* ... twice: keep alignment */
+    emit("    call duck_alloc\n");
+    emit("    pop %%rsi\n");                  /* src */
+    emit("    pop %%rdx\n");                  /* (discard) */
+    emit("    mov %%rax, %%rdi\n");
+    emit("    mov %%rbx, %%rcx\n");
+    emit("    push %%rax\n");                 /* dst */
+    emit("    cld\n");
+    emit("    rep movsb\n");
+    emit("    pop %%rax\n");
+    emit("    movb $0, (%%rax, %%rbx)\n");
+    emit("    mov %%rbp, %%rsp\n");
+    emit("    pop %%rbx\n");
+    emit("    pop %%rbp\n");
+    emit("    ret\n");
+
+    /* str(value: bool) -> "true" / "false" (never mutated: static) */
+    emit("\nduck_str_bool:\n");
+    emit("    test %%rdi, %%rdi\n");
+    emit("    jz .Ltb_false\n");
+    emit("    lea .Lstr_true(%%rip), %%rax\n");
+    emit("    ret\n");
+    emit(".Ltb_false:\n");
+    emit("    lea .Lstr_false(%%rip), %%rax\n");
+    emit("    ret\n");
+
+    /* input_line() -> one line from stdin without the newline. It reads one
+     * byte at a time so the next call starts exactly at the next line. */
+    emit("\nduck_input:\n");
+    emit("    push %%rbp\n");
+    emit("    push %%r12\n");
+    emit("    mov %%rsp, %%rbp\n");
+    emit("    sub $4104, %%rsp\n");           /* 4096-byte buffer + slack */
+    emit("    mov %%rsp, %%r12\n");           /* cursor */
+    emit(".Lin_loop:\n");
+    emit("    lea 4095(%%rsp), %%rax\n");     /* buffer limit */
+    emit("    cmp %%rax, %%r12\n");
+    emit("    jae .Lin_done\n");              /* full: return the partial line */
+    emit("    xor %%edi, %%edi\n");           /* fd 0 */
+    emit("    mov %%r12, %%rsi\n");           /* &buf[len] */
+    emit("    mov $1, %%edx\n");              /* one byte */
+    emit("    xor %%eax, %%eax\n");           /* sys_read */
+    emit("    syscall\n");
+    emit("    test %%rax, %%rax\n");
+    emit("    jle .Lin_done\n");              /* EOF (or error) */
+    emit("    movb (%%r12), %%al\n");
+    emit("    inc %%r12\n");
+    emit("    cmp $10, %%al\n");
+    emit("    jne .Lin_loop\n");              /* newline: drop it below */
+    emit("    dec %%r12\n");                  /* the newline is not copied */
+    emit(".Lin_done:\n");
+    emit("    movb $0, (%%r12)\n");           /* NUL-terminate */
+    emit("    mov %%r12, %%rdi\n");
+    emit("    sub %%rsp, %%rdi\n");           /* len */
+    emit("    inc %%rdi\n");                  /* len + 1 for the NUL */
+    emit("    call duck_alloc\n");
+    emit("    mov %%rax, %%rdi\n");           /* dst */
+    emit("    mov %%rsp, %%rsi\n");           /* src = buffer */
+    emit("    mov %%r12, %%rcx\n");
+    emit("    sub %%rsp, %%rcx\n");
+    emit("    inc %%rcx\n");                  /* copy the NUL too */
+    emit("    cld\n");
+    emit("    rep movsb\n");
+    emit("    mov %%rbp, %%rsp\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbp\n");
+    emit("    ret\n");
 }
 
 /* ---------- assembly output --------------------------------------------------- */
@@ -508,9 +801,17 @@ void generate(const SourceFile *src, Program *prog, FILE *out) {
     emit(".Lnl:\n    .ascii \"\\n\"\n");
     emit(".Ltrue:\n    .ascii \"true\\n\"\n");
     emit(".Lfalse:\n    .ascii \"false\\n\"\n");
+    emit(".Lstr_true:\n    .string \"true\"\n");
+    emit(".Lstr_false:\n    .string \"false\"\n");
+    emit(".Lempty:\n    .string \"\"\n");
+    emit(".Loommsg:\n    .ascii \"duck: out of memory\\n\"\n");
     for (int i = 0; i < nstrs; i++) {
         emit("%s:\n    .string \"", strs[i].label);
         emit_string_bytes(strs[i].text);
         emit("\"\n");
     }
+
+    emit("\n    .section .bss\n");
+    emit("    .align 8\n");
+    emit("duck_brk:\n    .zero 8\n");
 }

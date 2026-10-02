@@ -1,13 +1,13 @@
 // strings.duck - literals, escapes and value comparison.
-wing main() -> int {
+fn main() -> int {
     serve("hello");
     serve("with\ttab");
     serve("quote: \"duck\"");
     serve("line1\nline2");
 
-    nest a = "duck";
-    nest b = "duck";
-    nest c = "goose";
+    let a = "duck";
+    let b = "duck";
+    let c = "goose";
     serve(a == b);
     serve(a == c);
     serve(a != c);

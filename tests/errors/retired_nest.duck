@@ -1,0 +1,4 @@
+fn main() -> int {
+    nest x = 1;
+    send 0;
+}

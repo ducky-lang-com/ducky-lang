@@ -1,0 +1,29 @@
+// loops.duck - while with break and continue.
+fn main() -> int {
+    let a = 0;
+    let b = 0;
+    while true {
+        a = a + 1;
+        if a % 3 == 0 {
+            continue;
+        }
+        if a >= 7 {
+            break;
+        }
+        b = b + a;
+    }
+    serve(a); // 7: 1,2,(3 skip),4,5,(6 skip),7 break
+    serve(b); // 12: 1+2+4+5
+
+    let n = 0;
+    let i = 0;
+    while i < 10 {
+        i = i + 1;
+        if i % 2 == 0 {
+            continue;
+        }
+        n = n + i;
+    }
+    serve(n); // 25: 1+3+5+7+9
+    send 0;
+}

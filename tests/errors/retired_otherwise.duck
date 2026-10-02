@@ -1,7 +1,7 @@
-wing main() -> int {
-    when true {
+fn main() -> int {
+    if true {
         serve("a");
-    } else {
+    } otherwise {
         serve("b");
     }
     send 0;

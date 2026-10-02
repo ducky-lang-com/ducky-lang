@@ -31,11 +31,11 @@ compiler built from scratch.
 | L1 | Lexical structure: comments (`//`, `/* */`), identifiers, keywords | done |
 | L2 | Literals: decimal/hex `int`, `bool`, `string` with escapes (`\n \t \r \\ \"`) | done |
 | L3 | Types: `int` (64-bit), `bool`, `string`; `void` for calls only; no implicit conversions | done |
-| L4 | `nest` declarations with inference or annotation, assignment, block scopes + shadowing | done |
+| L4 | `let` declarations with inference or annotation, assignment, block scopes + shadowing | done |
 | L5 | Expressions with full precedence: `\|\|` `&&` `==` `!=` `<` `<=` `>` `>=` `+` `-` `*` `/` `%`, unary `-` `!`, parentheses | done |
-| L6 | Control flow: `when` / `otherwise when` / `otherwise`, `while` | done |
+| L6 | Control flow: `if` / `else if` / `else`, `while` | done |
 | L7 | Functions: any arity (>6 via stack), `-> type`, recursion, mutual recursion, definite-return analysis | done |
-| L8 | Entry point `wing main() -> int`, return value = exit status | done |
+| L8 | Entry point `fn main() -> int`, return value = exit status | done |
 | L9 | Built-in `serve` for `int`, `bool`, `string` (newline-terminated) | done |
 | L10 | String equality by content (`==`, `!=`) | done |
 | L11 | Short-circuit evaluation of `&&` and `\|\|` | done |
@@ -54,11 +54,13 @@ compiler built from scratch.
 
 **Test count: 22 (10 runtime + 12 error), all passing.**
 
-**Update v0.2.0 (breaking):** the user-facing keywords are now Duck-native —
-`fn` → `wing`, `let` → `nest`, `if` → `when`, `else` → `otherwise`,
-`return` → `send`, `print` → `serve`. The old words are no longer keywords
-(identifiers such as `wingman` keep working) and old syntax is rejected with
-a hint. The suite grew to **30 tests (12 runtime + 18 error), all passing.**
+**Update v0.2.0 (breaking, superseded):** the keywords were renamed to
+Duck-native words (`fn` → `wing`, `let` → `nest`, `if` → `when`, `else` →
+`otherwise`), keeping `send` and `serve`. v0.3.0 reverted the four renames to
+their English spellings after feedback, so `wing`, `nest`, `when` and
+`otherwise` are ordinary identifiers again (with a hint when used as syntax);
+`send` / `serve` remain. The suite is now **42 tests (17 runtime + 25 error),
+all passing.**
 
 ---
 
@@ -66,18 +68,20 @@ a hint. The suite grew to **30 tests (12 runtime + 18 error), all passing.**
 
 | # | Requirement | Notes |
 |---|---|---|
-| N1 | `for` loops (`for i in 0..10`) | desugars to `while` |
+| N1 | `for` loops (`for i in a .. b`) | done — v0.3.0; dedicated codegen (bounds evaluated once into a hidden slot), empty ranges, scoped loop variable |
 | N2 | Floats (`f64`) | new codegen paths, runtime number formatting |
-| N3 | Arrays (`[int]`) with `len`, indexing, bounds | needs runtime allocation (brk/mmap) |
-| N4 | String operations: `+` concatenation, `len`, indexing | |
-| N5 | Standard input: `input_line()` reading from stdin | `read` syscall |
+| N3 | Arrays (`[int]`) with `len`, indexing, bounds | needs runtime allocation (the `brk` bump allocator from v0.3.0 is the starting point) |
+| N4 | String operations: `+` concatenation, `len`, indexing | **partial** — `+` and `len()` done (v0.3.0); indexing open |
+| N5 | Standard input: `input_line()` reading from stdin | done — v0.3.0; `read` syscall, one line per call, EOF → `""` |
 | N6 | Multiple source files / `import` | driver links several `.o` |
 | N7 | Structs and field access | |
-| N8 | `break` / `continue` | |
+| N8 | `break` / `continue` | done — v0.3.0; innermost loop at any nesting depth |
 | N9 | Global constants (`const`) | |
 | N10 | Better errors: multiple errors per run instead of fail-fast | recovery in parser + sema |
 | N11 | Publish the extension to Open VSX and the VS Code Marketplace | needs a publisher account |
 | N12 | File icon for `.duck` files in the explorer | done — declared as the language icon (light/dark); works with themes that have specific file icons (e.g. the default Seti) without replacing them |
+| N13 | Bitwise operators `&` `\|` `^` `~` `<<` `>>` | done — v0.3.0; C precedence, arithmetic `>>`, `int` only |
+| N14 | `str()` builtin (`int`/`bool` → `string`) | done — v0.3.0; needed because there are no implicit conversions |
 
 ## Milestone M2 — Engineering
 
@@ -88,7 +92,7 @@ a hint. The suite grew to **30 tests (12 runtime + 18 error), all passing.**
 | E3 | Debug info (DWARF line tables) for gdb | |
 | E4 | Warnings: unused variables, unreachable code | |
 | E5 | Fuzzing / property tests for the lexer and parser | |
-| E6 | CI script running `make clean && make && make test` | |
+| E6 | CI script running `make clean && make && make test` | done — `.github/workflows/ci.yml` (build, test, examples) |
 
 ## Milestone M3 — Ambitious
 
@@ -109,7 +113,7 @@ hardware directly:
 | # | Requirement | Why a kernel needs it |
 |---|---|---|
 | B1 | Global/static variables at known addresses | kernel state, IDT/GDT, buffers |
-| B2 | Bitwise operators `&` `\|` `^` `~` `<<` `>>` | registers, flags, masks |
+| B2 | Bitwise operators `&` `\|` `^` `~` `<<` `>>` | registers, flags, masks — done in v0.3.0 |
 | B3 | Pointers, address-of and volatile-correct access | MMIO: VGA text at `0xB8000`, APIC, UART |
 | B4 | Structs (builds on N7) | descriptor tables, interrupt frames |
 | B5 | Intrinsics or inline assembly: `in`, `out`, `cli`, `sti`, `hlt` | port I/O, interrupt control |

@@ -1,22 +1,22 @@
-// identifiers.duck - retired keywords are ordinary identifiers, and words
-// that merely contain them (wingman, let, if, ...) are identifiers too.
-wing main() -> int {
-    nest wingman = 1;
-    nest lets = wingman + 1;
-    nest iffy = lets + 1;
-    nest elser = iffy + 1;
-    nest returns = elser + 1;
-    nest println = returns + 1;
-    nest let = println + 1;
-    nest fn = let + 1;
+// identifiers.duck - the retired words (wing, nest, when, otherwise) are
+// ordinary identifiers, and so are words that merely contain them.
+fn main() -> int {
+    let wing = 1;
+    let nest = wing + 1;
+    let when = nest + 1;
+    let otherwise = when + 1;
+    let wingman = otherwise + 1;
+    let nested = wingman + 1;
+    let returns = nested + 1;
+    let println = returns + 1;
 
-    serve(wingman); // 1
-    serve(lets);    // 2
-    serve(iffy);    // 3
-    serve(elser);   // 4
-    serve(returns); // 5
-    serve(println); // 6
-    serve(let);     // 7
-    serve(fn);      // 8
+    serve(wing);      // 1
+    serve(nest);      // 2
+    serve(when);      // 3
+    serve(otherwise); // 4
+    serve(wingman);   // 5
+    serve(nested);    // 6
+    serve(returns);   // 7
+    serve(println);   // 8
     send 0;
 }

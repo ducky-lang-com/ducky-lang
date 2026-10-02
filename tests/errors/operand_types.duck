@@ -1,4 +1,4 @@
-wing main() -> int {
+fn main() -> int {
     serve(1 + true);
     send 0;
 }

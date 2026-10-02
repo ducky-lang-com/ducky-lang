@@ -1,7 +1,7 @@
 // bools.duck - boolean values, logic operators and short-circuiting.
-wing main() -> int {
-    nest yes = true;
-    nest no = false;
+fn main() -> int {
+    let yes = true;
+    let no = false;
 
     serve(yes);
     serve(no);
@@ -16,7 +16,7 @@ wing main() -> int {
     serve((1 == 2) || (3 == 3));
 
     // The right-hand side must not run here: it divides by zero.
-    nest zero = 0;
+    let zero = 0;
     serve(yes || 10 / zero > 1);
     serve(no && 10 / zero > 1);
     send 0;

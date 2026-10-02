@@ -31,13 +31,23 @@ typedef enum {
     EX_CALL
 } ExprKind;
 
-typedef enum { UOP_NEG, UOP_NOT } UnaryOp;
+typedef enum { UOP_NEG, UOP_NOT, UOP_BITNOT } UnaryOp;
 
 typedef enum {
     BOP_ADD, BOP_SUB, BOP_MUL, BOP_DIV, BOP_MOD,
     BOP_EQ, BOP_NE, BOP_LT, BOP_LE, BOP_GT, BOP_GE,
-    BOP_AND, BOP_OR
+    BOP_AND, BOP_OR,
+    BOP_BITAND, BOP_BITOR, BOP_XOR, BOP_SHL, BOP_SHR
 } BinaryOp;
+
+/* Which builtin a call refers to (BUILTIN_NONE for ordinary calls). */
+typedef enum {
+    BUILTIN_NONE = 0,
+    BUILTIN_SERVE,
+    BUILTIN_LEN,
+    BUILTIN_STR,
+    BUILTIN_INPUT
+} Builtin;
 
 typedef struct Func Func;
 typedef struct Block Block;
@@ -70,7 +80,7 @@ struct Expr {
             Expr **args;
             int nargs;
             Func *fn;  /* resolved callee */
-            int builtin; /* 1 for serve() */
+            Builtin builtin;
         } call;
     };
 };
@@ -82,6 +92,9 @@ typedef enum {
     ST_EXPR,
     ST_IF,
     ST_WHILE,
+    ST_FOR,
+    ST_BREAK,
+    ST_CONTINUE,
     ST_RETURN,
     ST_BLOCK
 } StmtKind;
@@ -118,7 +131,15 @@ struct Stmt {
             Expr *cond;
             Block *body;
         } whiles;
-        Expr *value; /* ST_RETURN; NULL for a bare `return;` */
+        struct {
+            char *var_name;
+            Expr *start; /* inclusive lower bound */
+            Expr *end;   /* exclusive upper bound */
+            Block *body;
+            int var_offset; /* loop variable slot, set by sema */
+            int end_offset; /* hidden slot holding the range end */
+        } fors;
+        Expr *value; /* ST_RETURN; NULL for a bare `send;` */
     };
 };
 

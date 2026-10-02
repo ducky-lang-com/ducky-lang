@@ -1,0 +1,6 @@
+fn main() -> int {
+    for i in 0 .. "x" {
+        serve(i);
+    }
+    send 0;
+}

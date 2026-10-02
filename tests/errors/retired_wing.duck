@@ -1,4 +1,3 @@
 wing main() -> int {
-    let x = 1;
     send 0;
 }

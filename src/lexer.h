@@ -16,7 +16,11 @@ typedef enum {
     TK_IF,
     TK_ELSE,
     TK_WHILE,
+    TK_FOR,
+    TK_IN,
     TK_RETURN,
+    TK_BREAK,
+    TK_CONTINUE,
     TK_TRUE,
     TK_FALSE,
     TK_KW_INT,
@@ -32,6 +36,7 @@ typedef enum {
     TK_SEMI,
     TK_COLON,
     TK_ARROW,
+    TK_DOTDOT,
 
     /* operators */
     TK_PLUS,
@@ -48,7 +53,13 @@ typedef enum {
     TK_GE,
     TK_AND,
     TK_OR,
-    TK_NOT
+    TK_NOT,
+    TK_BITAND,
+    TK_BITOR,
+    TK_XOR,
+    TK_TILDE,
+    TK_SHL,
+    TK_SHR
 } TokenKind;
 
 typedef struct Token {

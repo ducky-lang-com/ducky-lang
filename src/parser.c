@@ -48,14 +48,14 @@ static void describe(Token *t, char *buf, size_t buflen) {
     }
 }
 
-/* The retired English keywords and the Duck-native word that replaced
- * them. The old words are ordinary identifiers now; when their use breaks
- * the syntax we point the user at the new spelling. */
+/* The retired words and the canonical spelling that replaced them. The old
+ * words are ordinary identifiers now; when their use breaks the syntax we
+ * point the user at the right spelling. */
 static const char *retired_keyword(const char *name) {
-    if (strcmp(name, "fn") == 0) return "wing";
-    if (strcmp(name, "let") == 0) return "nest";
-    if (strcmp(name, "if") == 0) return "when";
-    if (strcmp(name, "else") == 0) return "otherwise";
+    if (strcmp(name, "wing") == 0) return "fn";
+    if (strcmp(name, "nest") == 0) return "let";
+    if (strcmp(name, "when") == 0) return "if";
+    if (strcmp(name, "otherwise") == 0) return "else";
     if (strcmp(name, "return") == 0) return "send";
     if (strcmp(name, "print") == 0) return "serve";
     return NULL;
@@ -212,11 +212,13 @@ static Expr *parse_postfix(void) {
 
 static Expr *parse_unary(void) {
     Token *t = peek();
-    if (t->kind == TK_MINUS || t->kind == TK_NOT) {
+    if (t->kind == TK_MINUS || t->kind == TK_NOT || t->kind == TK_TILDE) {
         next();
         Expr *operand = parse_unary();
         Expr *e = new_expr(EX_UNARY, t->line, t->col);
-        e->unary.op = t->kind == TK_MINUS ? UOP_NEG : UOP_NOT;
+        e->unary.op = t->kind == TK_MINUS   ? UOP_NEG
+                      : t->kind == TK_NOT   ? UOP_NOT
+                                            : UOP_BITNOT;
         e->unary.operand = operand;
         return e;
     }
@@ -260,8 +262,26 @@ static Expr *parse_add(void) {
     return lhs;
 }
 
-static Expr *parse_rel(void) {
+static Expr *parse_shift(void) {
     Expr *lhs = parse_add();
+    for (;;) {
+        BinaryOp op;
+        if (check(TK_SHL)) op = BOP_SHL;
+        else if (check(TK_SHR)) op = BOP_SHR;
+        else break;
+        next();
+        Expr *rhs = parse_add();
+        Expr *e = new_expr(EX_BINARY, lhs->line, lhs->col);
+        e->binary.op = op;
+        e->binary.lhs = lhs;
+        e->binary.rhs = rhs;
+        lhs = e;
+    }
+    return lhs;
+}
+
+static Expr *parse_rel(void) {
+    Expr *lhs = parse_shift();
     for (;;) {
         BinaryOp op;
         if (check(TK_LT)) op = BOP_LT;
@@ -270,7 +290,7 @@ static Expr *parse_rel(void) {
         else if (check(TK_GE)) op = BOP_GE;
         else break;
         next();
-        Expr *rhs = parse_add();
+        Expr *rhs = parse_shift();
         Expr *e = new_expr(EX_BINARY, lhs->line, lhs->col);
         e->binary.op = op;
         e->binary.lhs = lhs;
@@ -298,11 +318,53 @@ static Expr *parse_eq(void) {
     return lhs;
 }
 
-static Expr *parse_and(void) {
+static Expr *parse_bitand(void) {
     Expr *lhs = parse_eq();
-    while (check(TK_AND)) {
+    while (check(TK_BITAND)) {
         next();
         Expr *rhs = parse_eq();
+        Expr *e = new_expr(EX_BINARY, lhs->line, lhs->col);
+        e->binary.op = BOP_BITAND;
+        e->binary.lhs = lhs;
+        e->binary.rhs = rhs;
+        lhs = e;
+    }
+    return lhs;
+}
+
+static Expr *parse_bitxor(void) {
+    Expr *lhs = parse_bitand();
+    while (check(TK_XOR)) {
+        next();
+        Expr *rhs = parse_bitand();
+        Expr *e = new_expr(EX_BINARY, lhs->line, lhs->col);
+        e->binary.op = BOP_XOR;
+        e->binary.lhs = lhs;
+        e->binary.rhs = rhs;
+        lhs = e;
+    }
+    return lhs;
+}
+
+static Expr *parse_bitor(void) {
+    Expr *lhs = parse_bitxor();
+    while (check(TK_BITOR)) {
+        next();
+        Expr *rhs = parse_bitxor();
+        Expr *e = new_expr(EX_BINARY, lhs->line, lhs->col);
+        e->binary.op = BOP_BITOR;
+        e->binary.lhs = lhs;
+        e->binary.rhs = rhs;
+        lhs = e;
+    }
+    return lhs;
+}
+
+static Expr *parse_and(void) {
+    Expr *lhs = parse_bitor();
+    while (check(TK_AND)) {
+        next();
+        Expr *rhs = parse_bitor();
         Expr *e = new_expr(EX_BINARY, lhs->line, lhs->col);
         e->binary.op = BOP_AND;
         e->binary.lhs = lhs;
@@ -355,7 +417,7 @@ static Block *parse_block(void) {
 
 static Stmt *parse_let(void) {
     Token *kw = next(); /* let */
-    Token *name = expect(TK_IDENT, "a variable name after 'nest'");
+    Token *name = expect(TK_IDENT, "a variable name after 'let'");
 
     Stmt *s = new_stmt(ST_LET, kw->line, kw->col);
     s->let.name = name->name;
@@ -363,7 +425,7 @@ static Stmt *parse_let(void) {
         s->let.has_ann = 1;
         s->let.ann = parse_type();
     }
-    expect(TK_ASSIGN, "'=' in a 'nest' declaration");
+    expect(TK_ASSIGN, "'=' in a 'let' declaration");
     s->let.init = parse_expr();
     expect(TK_SEMI, "';' after the declaration");
     return s;
@@ -403,11 +465,36 @@ static Stmt *parse_while(void) {
 }
 
 static Stmt *parse_return(void) {
-    Token *kw = next(); /* return */
+    Token *kw = next(); /* send */
     Stmt *s = new_stmt(ST_RETURN, kw->line, kw->col);
     if (!check(TK_SEMI)) s->value = parse_expr();
     expect(TK_SEMI, "';' after 'send'");
     return s;
+}
+
+static Stmt *parse_for(void) {
+    Token *kw = next(); /* for */
+    Stmt *s = new_stmt(ST_FOR, kw->line, kw->col);
+    Token *var = expect(TK_IDENT, "a loop variable name after 'for'");
+    expect(TK_IN, "'in' in a 'for' loop");
+    s->fors.start = parse_expr();
+    expect(TK_DOTDOT, "'..' between the bounds of a 'for' range");
+    s->fors.end = parse_expr();
+    s->fors.body = parse_block();
+    s->fors.var_name = var->name;
+    return s;
+}
+
+static Stmt *parse_break(void) {
+    Token *kw = next();
+    expect(TK_SEMI, "';' after 'break'");
+    return new_stmt(ST_BREAK, kw->line, kw->col);
+}
+
+static Stmt *parse_continue(void) {
+    Token *kw = next();
+    expect(TK_SEMI, "';' after 'continue'");
+    return new_stmt(ST_CONTINUE, kw->line, kw->col);
 }
 
 static Stmt *parse_stmt(void) {
@@ -426,6 +513,12 @@ static Stmt *parse_stmt(void) {
         return parse_if();
     case TK_WHILE:
         return parse_while();
+    case TK_FOR:
+        return parse_for();
+    case TK_BREAK:
+        return parse_break();
+    case TK_CONTINUE:
+        return parse_continue();
     case TK_RETURN:
         return parse_return();
     case TK_IDENT:
@@ -466,7 +559,7 @@ static Stmt *parse_stmt(void) {
 /* ---------- top level ------------------------------------------------------ */
 
 static Func *parse_func(void) {
-    Token *kw = expect(TK_FN, "'wing' to start a function declaration");
+    Token *kw = expect(TK_FN, "'fn' to start a function declaration");
     Token *name = expect(TK_IDENT, "a function name");
 
     Func *f = arena_alloc(sizeof(Func));
@@ -523,7 +616,7 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
             char got[64];
             describe(peek(), got, sizeof(got));
             fatal_at(src, peek()->line, peek()->col,
-                     "expected a top-level function declaration ('wing'), found %s", got);
+                     "expected a top-level function declaration ('fn'), found %s", got);
         }
         vec_push(&funcs, parse_func());
     }

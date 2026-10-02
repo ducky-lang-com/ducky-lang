@@ -1,0 +1,4 @@
+fn main() -> int {
+    serve("answer: " + 42);
+    send 0;
+}

@@ -1,0 +1,17 @@
+// concat.duck - string '+', len() and str().
+fn main() -> int {
+    let hello = "Hello, " + "Duck!";
+    serve(hello);            // Hello, Duck!
+    serve("a" + "b" + "c");  // abc
+    serve(len(hello));       // 12
+    serve(len(""));          // 0
+    serve(str(42));          // 42
+    serve(str(-7));          // -7
+    serve(str(true));        // true
+    serve(str(false));       // false
+    serve("n=" + str(6 * 7));   // n=42
+    serve(str(1000000) + "!");  // 1000000!
+    let s = str(true);
+    serve(s == "true");      // true
+    send 0;
+}

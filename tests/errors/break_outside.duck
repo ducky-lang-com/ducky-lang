@@ -1,3 +1,4 @@
 fn main() -> int {
+    break;
     send 0;
 }

@@ -1,13 +1,13 @@
 // fibonacci.duck - recursive Fibonacci numbers from 0 to 20.
-wing fib(n: int) -> int {
-    when n < 2 {
+fn fib(n: int) -> int {
+    if n < 2 {
         send n;
     }
     send fib(n - 1) + fib(n - 2);
 }
 
-wing main() -> int {
-    nest i = 0;
+fn main() -> int {
+    let i = 0;
     while i <= 20 {
         serve(fib(i));
         i = i + 1;

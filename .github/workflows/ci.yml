@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make clean && make
+
+      - name: Test suite
+        run: make test
+
+      - name: Examples
+        run: make examples
+
+      - name: Zero warnings check
+        run: |
+          make clean
+          out=$(make 2>&1)
+          echo "$out"
+          if echo "$out" | grep -E 'warning:'; then
+            echo "compiler warnings found" >&2
+            exit 1
+          fi

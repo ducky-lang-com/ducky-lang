@@ -1,0 +1,4 @@
+fn main() -> int {
+    serve(str("not yet"));
+    send 0;
+}

@@ -1,29 +1,29 @@
 // functions.duck - calls, parameters, values sent back and recursion.
-wing add(a: int, b: int) -> int {
+fn add(a: int, b: int) -> int {
     send a + b;
 }
 
-wing fib(n: int) -> int {
-    when n < 2 {
+fn fib(n: int) -> int {
+    if n < 2 {
         send n;
     }
     send fib(n - 1) + fib(n - 2);
 }
 
-wing describe(name: string) -> string {
+fn describe(name: string) -> string {
     send name;
 }
 
-wing nothing() {
+fn nothing() {
     serve("nothing");
 }
 
-wing main() -> int {
+fn main() -> int {
     serve(add(2, 40));
     serve(fib(20));
     serve(describe("duck"));
     nothing();
-    nest v = add(fib(10), fib(5));
+    let v = add(fib(10), fib(5));
     serve(v);
     serve(add(add(1, 2), add(3, 4)));
     send 0;

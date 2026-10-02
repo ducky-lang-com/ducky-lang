@@ -115,6 +115,7 @@ const char *unary_op_name(UnaryOp op) {
     switch (op) {
     case UOP_NEG: return "-";
     case UOP_NOT: return "!";
+    case UOP_BITNOT: return "~";
     }
     return "?";
 }
@@ -134,6 +135,11 @@ const char *binary_op_name(BinaryOp op) {
     case BOP_GE:  return ">=";
     case BOP_AND: return "&&";
     case BOP_OR:  return "||";
+    case BOP_BITAND: return "&";
+    case BOP_BITOR:  return "|";
+    case BOP_XOR:    return "^";
+    case BOP_SHL:    return "<<";
+    case BOP_SHR:    return ">>";
     }
     return "?";
 }

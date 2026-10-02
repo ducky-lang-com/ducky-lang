@@ -1,7 +1,7 @@
-wing f(a: int) -> int {
+fn f(a: int) -> int {
     send a;
 }
 
-wing main() -> int {
+fn main() -> int {
     send f(1, 2);
 }

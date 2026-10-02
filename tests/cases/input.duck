@@ -1,0 +1,8 @@
+// input.duck - input_line() reads one line from stdin.
+fn main() -> int {
+    let name = input_line();
+    let city = input_line();
+    serve("Hello, " + name + " from " + city);
+    serve("[" + input_line() + "]"); // EOF gives an empty string
+    send 0;
+}

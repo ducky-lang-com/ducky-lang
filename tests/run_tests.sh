@@ -45,7 +45,13 @@ for src in "$ROOT"/tests/cases/*.duck; do
         continue
     fi
 
-    "$exe" >"$TMP/$name.out" 2>&1
+    # Programs that read stdin get their input from tests/cases/<name>.in.
+    stdin_file=/dev/null
+    if [ -f "$ROOT/tests/cases/$name.in" ]; then
+        stdin_file="$ROOT/tests/cases/$name.in"
+    fi
+
+    "$exe" <"$stdin_file" >"$TMP/$name.out" 2>&1
     code=$?
 
     if ! diff -u "$ROOT/tests/cases/$name.expected" "$TMP/$name.out" >"$TMP/$name.diff"; then
