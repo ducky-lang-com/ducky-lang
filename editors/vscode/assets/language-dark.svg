@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Duck file icon (dark backgrounds)">
   <title>Duck file icon - dark theme variant</title>
-  <defs>
-    <linearGradient id="duckGradientDark" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%"   stop-color="#FFC107"/>
-      <stop offset="100%" stop-color="#FF6F00"/>
-    </linearGradient>
-  </defs>
-  <path fill="url(#duckGradientDark)"
+  <path fill="#F4A7A7"
         fill-rule="evenodd"
         d="M 24 16
            L 64 16

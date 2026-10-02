@@ -1,6 +1,6 @@
 # Duck (duck-lang)
 
-![Duck logo: a solid amber D](editors/vscode/assets/icon.svg)
+![Duck logo: a solid pastel-red D](editors/vscode/assets/icon.svg)
 
 A small, statically typed programming language that **compiles to native
 x86-64 machine code**. The compiler (`duckc`) is written in C11, emits AT&T
@@ -143,7 +143,7 @@ make uninstall-vscode
 
 Then run **Developer: Reload Window** (or restart the editor). It lives in
 [`editors/vscode/`](editors/vscode/) and can also be installed by hand — see
-its README. The extension gives `.duck` files the amber D as their **file
+its README. The extension gives `.duck` files the pastel-red D as their **file
 icon** in the explorer and tabs (declared as the language icon, so it works
 with your current file icon theme — no theme switch needed). It is not
 published on the Marketplace / Open VSX yet.

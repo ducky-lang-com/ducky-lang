@@ -1,6 +1,6 @@
 # Duck for VS Code / VSCodium / Cursor
 
-![Duck logo: a solid amber D](assets/icon.svg)
+![Duck logo: a solid pastel-red D](assets/icon.svg)
 
 Syntax highlighting and language support for the **Duck** programming
 language (`.duck` files).
@@ -12,7 +12,7 @@ language (`.duck` files).
   `true`/`false`, `const` names, function definitions and calls, the builtins
   (`serve`, `len`, `str`, `input_line`, `push`), operators (including the
   bitwise `& | ^ ~ << >>` and the range `..`);
-* **file icon**: `.duck` files show the amber D in the explorer and tabs
+* **file icon**: `.duck` files show the pastel-red D in the explorer and tabs
   (declared as the language icon, so it works with your current file icon
   theme);
 * `//` and `/* */` commenting (`Shift+Alt+A`), auto-closing brackets and
