@@ -1,4 +1,4 @@
-/* common.h - shared utilities for the duckc compiler. */
+/* common.h - shared utilities for the duckyc compiler. */
 #ifndef DUCK_COMMON_H
 #define DUCK_COMMON_H
 

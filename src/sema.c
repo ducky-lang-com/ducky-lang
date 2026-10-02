@@ -57,7 +57,10 @@ static int is_builtin_name(const char *name) {
     return strcmp(name, "serve") == 0 || strcmp(name, "len") == 0 ||
            strcmp(name, "str") == 0 || strcmp(name, "input_line") == 0 ||
            strcmp(name, "int") == 0 || strcmp(name, "float") == 0 ||
-           strcmp(name, "push") == 0;
+           strcmp(name, "push") == 0 || strcmp(name, "scan_int") == 0 ||
+           strcmp(name, "scan_float") == 0 ||
+           strcmp(name, "scan_int_line") == 0 ||
+           strcmp(name, "scan_float_line") == 0;
 }
 
 static Func *find_func(Program *prog, const char *name) {
@@ -236,7 +239,7 @@ static Type check_expr(Expr *e) {
             if (l == TY_FLOAT || r == TY_FLOAT) {
                 if (l != TY_FLOAT || r != TY_FLOAT) {
                     err_node(e,
-                        "operator '+' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
+                        "operator '+' requires two 'float' values or two 'int' values - Ducky has no implicit conversion (use float(x)), found '%s' and '%s'",
                         type_name(l), type_name(r));
                 }
                 return e->type = TY_FLOAT;
@@ -261,7 +264,7 @@ static Type check_expr(Expr *e) {
             if (l == TY_FLOAT || r == TY_FLOAT) {
                 if (l != TY_FLOAT || r != TY_FLOAT) {
                     err_node(e,
-                        "operator '%s' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
+                        "operator '%s' requires two 'float' values or two 'int' values - Ducky has no implicit conversion (use float(x)), found '%s' and '%s'",
                         binary_op_name(op), type_name(l), type_name(r));
                 }
                 return e->type = TY_FLOAT;
@@ -291,7 +294,7 @@ static Type check_expr(Expr *e) {
             if (l == TY_FLOAT || r == TY_FLOAT) {
                 if (l != TY_FLOAT || r != TY_FLOAT) {
                     err_node(e,
-                        "operator '%s' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
+                        "operator '%s' requires two 'float' values or two 'int' values - Ducky has no implicit conversion (use float(x)), found '%s' and '%s'",
                         binary_op_name(op), type_name(l), type_name(r));
                 }
                 return e->type = TY_BOOL;
@@ -435,6 +438,52 @@ static Type check_expr(Expr *e) {
             return e->type = TY_STRING;
         }
 
+        if (strcmp(name, "scan_int") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "scan_int() expects exactly 1 argument, found %d",
+                    e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_STRING) {
+                err_node(e->call.args[0],
+                    "scan_int() expects a 'string', found '%s'", type_name(t));
+            }
+            e->call.builtin = BUILTIN_SCAN_INT;
+            return e->type = TY_INT;
+        }
+
+        if (strcmp(name, "scan_float") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "scan_float() expects exactly 1 argument, found %d",
+                    e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_STRING) {
+                err_node(e->call.args[0],
+                    "scan_float() expects a 'string', found '%s'", type_name(t));
+            }
+            e->call.builtin = BUILTIN_SCAN_FLOAT;
+            return e->type = TY_FLOAT;
+        }
+
+        if (strcmp(name, "scan_int_line") == 0) {
+            if (e->call.nargs != 0) {
+                err_node(e, "scan_int_line() expects no arguments, found %d",
+                    e->call.nargs);
+            }
+            e->call.builtin = BUILTIN_SCAN_INT_LINE;
+            return e->type = TY_INT;
+        }
+
+        if (strcmp(name, "scan_float_line") == 0) {
+            if (e->call.nargs != 0) {
+                err_node(e, "scan_float_line() expects no arguments, found %d",
+                    e->call.nargs);
+            }
+            e->call.builtin = BUILTIN_SCAN_FLOAT_LINE;
+            return e->type = TY_FLOAT;
+        }
+
         if (strcmp(name, "int") == 0) {
             if (e->call.nargs != 1) {
                 err_node(e, "int() expects exactly 1 argument, found %d",
@@ -516,21 +565,33 @@ static Type check_expr(Expr *e) {
             }
             if (strcmp(name, "print") == 0) {
                 err_node(e,
-                    "'print' does not exist in Duck - the output builtin is 'serve'");
+                    "'print' does not exist in Ducky - the output builtin is 'serve'");
             }
             err_node(e, "undefined function '%s'", name);
         }
 
-        if (e->call.nargs != fn->nparams) {
+        if (fn->is_variadic) {
+            if (e->call.nargs < fn->nparams) {
+                err_node(e, "function '%s' expects at least %d argument%s, found %d",
+                    fn->name, fn->nparams, fn->nparams == 1 ? "" : "s", e->call.nargs);
+            }
+        } else if (e->call.nargs != fn->nparams) {
             err_node(e, "function '%s' expects %d argument%s, found %d", fn->name,
                 fn->nparams, fn->nparams == 1 ? "" : "s", e->call.nargs);
         }
         for (int i = 0; i < e->call.nargs; i++) {
             Type t = check_expr(e->call.args[i]);
-            if (t != fn->params[i]->type) {
+            if (i < fn->nparams) {
+                if (t != fn->params[i]->type) {
+                    err_node(e->call.args[i],
+                        "argument %d of '%s' expects '%s', found '%s'", i + 1, fn->name,
+                        type_name(fn->params[i]->type), type_name(t));
+                }
+            } else if (t != TY_INT && t != TY_FLOAT && t != TY_BOOL && t != TY_STRING) {
+                /* Extra argument of a C variadic call: only scalars map. */
                 err_node(e->call.args[i],
-                    "argument %d of '%s' expects '%s', found '%s'", i + 1, fn->name,
-                    type_name(fn->params[i]->type), type_name(t));
+                    "argument %d of '%s' expects 'int', 'float', 'bool' or 'string', "
+                    "found '%s'", i + 1, fn->name, type_name(t));
             }
         }
         e->call.fn = fn;
@@ -730,6 +791,8 @@ static void check_block(Block *b) {
 }
 
 static void check_func(Func *f) {
+    if (f->is_extern) return; /* a C declaration has no body to analyze */
+
     g_fn = f;
     g_scope = NULL;
     g_slots = 0;
@@ -763,7 +826,7 @@ void analyze(const SourceFile *src, Program *prog) {
     for (int i = 0; i < prog->nconsts; i++) {
         Const *c = prog->consts[i];
 
-        if (c->name[0] == '_' || starts_with(c->name, "duck_")) {
+        if (c->name[0] == '_' || starts_with(c->name, "ducky_")) {
             err_node(c, "constant name '%s' is reserved", c->name);
         }
         if (is_builtin_name(c->name)) {
@@ -791,7 +854,7 @@ void analyze(const SourceFile *src, Program *prog) {
     for (int i = 0; i < prog->nstructs; i++) {
         StructDecl *sd = prog->structs[i];
 
-        if (sd->name[0] == '_' || starts_with(sd->name, "duck_")) {
+        if (sd->name[0] == '_' || starts_with(sd->name, "ducky_")) {
             err_node(sd, "struct name '%s' is reserved", sd->name);
         }
         if (is_builtin_name(sd->name)) {
@@ -806,7 +869,7 @@ void analyze(const SourceFile *src, Program *prog) {
         }
         for (int j = 0; j < sd->nfields; j++) {
             Field *f = sd->fields[j];
-            if (f->name[0] == '_' || starts_with(f->name, "duck_")) {
+            if (f->name[0] == '_' || starts_with(f->name, "ducky_")) {
                 err_node(f, "field name '%s' is reserved", f->name);
             }
             for (int k = 0; k < j; k++) {
@@ -823,7 +886,7 @@ void analyze(const SourceFile *src, Program *prog) {
     for (int i = 0; i < prog->nfuncs; i++) {
         Func *f = prog->funcs[i];
 
-        if (f->name[0] == '_' || starts_with(f->name, "duck_")) {
+        if (f->name[0] == '_' || starts_with(f->name, "ducky_")) {
             err_node(f, "function name '%s' is reserved", f->name);
         }
         if (is_builtin_name(f->name)) {
@@ -845,11 +908,34 @@ void analyze(const SourceFile *src, Program *prog) {
                 }
             }
         }
+
+        if (f->is_extern) {
+            /* Only scalars and strings have an unambiguous C ABI mapping. */
+            for (int j = 0; j < f->nparams; j++) {
+                Type t = f->params[j]->type;
+                if (t != TY_INT && t != TY_FLOAT && t != TY_BOOL && t != TY_STRING) {
+                    err_node(f->params[j],
+                        "extern function '%s': parameter %d cannot be '%s' - "
+                        "use 'int', 'float', 'bool' or 'string'",
+                        f->name, j + 1, type_name(t));
+                }
+            }
+            if (f->ret != TY_VOID && f->ret != TY_INT && f->ret != TY_FLOAT &&
+                f->ret != TY_BOOL && f->ret != TY_STRING) {
+                err_node(f,
+                    "extern function '%s': the return type cannot be '%s' - "
+                    "use 'int', 'float', 'bool', 'string' or no return type",
+                    f->name, type_name(f->ret));
+            }
+        }
     }
 
     Func *entry = find_func(prog, "main");
     if (!entry) {
         err(1, 1, "the program must define an entry point: 'fn main() -> int'");
+    }
+    if (entry->is_extern) {
+        err_node(entry, "the entry point 'main' must be defined, not declared 'extern'");
     }
     if (entry->nparams != 0 || entry->ret != TY_INT) {
         err_node(entry, "the entry point must be declared as 'fn main() -> int'");

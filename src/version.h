@@ -1,8 +1,8 @@
-/* version.h - duckc version information. */
-#ifndef DUCK_VERSION_H
-#define DUCK_VERSION_H
+/* version.h - duckyc version information. */
+#ifndef DUCKY_VERSION_H
+#define DUCKY_VERSION_H
 
-#define DUCKC_VERSION "0.6.0"
-#define DUCK_LANG_NAME "Duck"
+#define DUCKYC_VERSION "0.7.0"
+#define DUCKY_LANG_NAME "Ducky"
 
-#endif /* DUCK_VERSION_H */
+#endif /* DUCKY_VERSION_H */

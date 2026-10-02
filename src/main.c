@@ -1,4 +1,4 @@
-/* main.c - duckc, the Duck language compiler.
+/* main.c - duckyc, the Ducky language compiler.
  *
  * Pipeline: source -> tokens -> AST -> type-checked AST -> x86-64 assembly
  * -> object file (GNU as) -> executable (system linker).
@@ -30,9 +30,9 @@ typedef struct {
 
 static void usage(FILE *f) {
     fprintf(f,
-            "duckc - the %s language compiler\n"
+            "duckyc - the %s language compiler\n"
             "\n"
-            "Usage: duckc [options] <file.duck>\n"
+            "Usage: duckyc [options] <file.duck>\n"
             "\n"
             "Options:\n"
             "  -o <path>        write the output to <path>\n"
@@ -42,9 +42,9 @@ static void usage(FILE *f) {
             "  --version        show version information and exit\n"
             "\n"
             "Without -o, the output name is derived from the input file:\n"
-            "  duckc hello.duck   -> ./hello\n"
-            "  duckc -S hello.duck -> ./hello.s\n",
-            DUCK_LANG_NAME);
+            "  duckyc hello.duck   -> ./hello\n"
+            "  duckyc -S hello.duck -> ./hello.s\n",
+            DUCKY_LANG_NAME);
 }
 
 /* Run a child process and return its exit status. */
@@ -53,7 +53,7 @@ static int run(char *const argv[]) {
     if (pid < 0) fatal("cannot fork: %s", strerror(errno));
     if (pid == 0) {
         execvp(argv[0], argv);
-        fprintf(stderr, "duckc: error: cannot run '%s': %s\n", argv[0], strerror(errno));
+        fprintf(stderr, "duckyc: error: cannot run '%s': %s\n", argv[0], strerror(errno));
         _exit(127);
     }
     int status = 0;
@@ -94,10 +94,10 @@ static Options parse_args(int argc, char **argv) {
             usage(stdout);
             exit(0);
         } else if (strcmp(a, "--version") == 0) {
-            printf("duckc %s (the %s language compiler)\n", DUCKC_VERSION, DUCK_LANG_NAME);
+            printf("duckyc %s (the %s language compiler)\n", DUCKYC_VERSION, DUCKY_LANG_NAME);
             exit(0);
         } else if (a[0] == '-' && a[1] != '\0') {
-            fprintf(stderr, "duckc: error: unknown option '%s'\n", a);
+            fprintf(stderr, "duckyc: error: unknown option '%s'\n", a);
             usage(stderr);
             exit(1);
         } else {
@@ -268,7 +268,7 @@ int main(int argc, char **argv) {
     Options opt = parse_args(argc, argv);
 
     if (!opt.input) {
-        fprintf(stderr, "duckc: error: no input file\n\n");
+        fprintf(stderr, "duckyc: error: no input file\n\n");
         usage(stderr);
         return 1;
     }
@@ -326,7 +326,7 @@ int main(int argc, char **argv) {
     }
 
     /* Full pipeline: assemble and link. */
-    char dir[] = "/tmp/duckc-XXXXXX";
+    char dir[] = "/tmp/duckyc-XXXXXX";
     if (!mkdtemp(dir)) fatal("cannot create a temporary directory: %s", strerror(errno));
 
     char asm_path[512];
@@ -347,14 +347,31 @@ int main(int argc, char **argv) {
     char *as_argv[] = {"as", "--64", "-o", obj_path, asm_path, NULL};
     status = run(as_argv);
     if (status != 0) {
-        fprintf(stderr, "duckc: error: the assembler failed\n");
+        fprintf(stderr, "duckyc: error: the assembler failed\n");
         goto cleanup;
     }
 
-    char *ld_argv[] = {"ld", "-o", (char *)out_path, obj_path, NULL};
-    status = run(ld_argv);
+    /* Programs that declare extern C functions link against the C library
+     * (through cc, so the dynamic loader comes with it); pure Ducky programs
+     * stay freestanding and link with the raw ld. */
+    int has_extern = 0;
+    for (int i = 0; i < prog->nfuncs; i++) {
+        if (prog->funcs[i]->is_extern) {
+            has_extern = 1;
+            break;
+        }
+    }
+
+    if (has_extern) {
+        char *cc_argv[] = {"cc", "-nostartfiles", "-o", (char *)out_path,
+                           obj_path, "-lm", NULL};
+        status = run(cc_argv);
+    } else {
+        char *ld_argv[] = {"ld", "-o", (char *)out_path, obj_path, NULL};
+        status = run(ld_argv);
+    }
     if (status != 0) {
-        fprintf(stderr, "duckc: error: the linker failed\n");
+        fprintf(stderr, "duckyc: error: the linker failed\n");
         goto cleanup;
     }
 

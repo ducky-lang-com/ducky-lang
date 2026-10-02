@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "Duck",
+  "name": "Ducky",
   "scopeName": "source.duck",
   "fileTypes": ["duck"],
   "patterns": [
@@ -119,7 +119,7 @@
       "patterns": [
         {
           "name": "keyword.control.duck",
-          "match": "\\b(fn|struct|import|const|let|if|else|while|for|in|send|break|continue)\\b"
+          "match": "\\b(fn|extern|struct|import|const|let|if|else|while|for|in|send|break|continue)\\b"
         }
       ]
     },
@@ -143,7 +143,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.duck",
-          "match": "\\b(serve|len|str|input_line|push)(?=\\s*\\()"
+          "match": "\\b(serve|len|str|input_line|push|scan_int|scan_float|scan_int_line|scan_float_line)(?=\\s*\\()"
         }
       ]
     },
@@ -170,7 +170,7 @@
       "patterns": [
         {
           "name": "keyword.operator.duck",
-          "match": "->|==|!=|<=|>=|&&|\\|\\||<<|>>|\\.\\.|[-+*/%!&|^~]"
+          "match": "->|==|!=|<=|>=|&&|\\|\\||<<|>>|\\.\\.\\.|\\.\\.|[-+*/%!&|^~]"
         }
       ]
     },

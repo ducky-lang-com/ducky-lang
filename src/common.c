@@ -91,7 +91,7 @@ static void print_source_line(const SourceFile *f, int line, int col) {
 void fatal(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    fputs("duckc: error: ", stderr);
+    fputs("duckyc: error: ", stderr);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);

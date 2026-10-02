@@ -1,0 +1,1 @@
+argument 2 of 'printf' expects 'int', 'float', 'bool' or 'string', found '[int]'

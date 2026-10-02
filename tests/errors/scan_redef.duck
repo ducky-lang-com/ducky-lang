@@ -1,0 +1,7 @@
+fn scan_int(s: string) -> int {
+    send 0;
+}
+
+fn main() -> int {
+    send 0;
+}

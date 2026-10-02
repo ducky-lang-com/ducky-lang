@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh - installs the Duck language extension into VS Code-compatible
+# install.sh - installs the Ducky language extension into VS Code-compatible
 # editors by copying it into their extension directory. Works offline and
 # needs no marketplace account.
 #
@@ -12,7 +12,7 @@ set -eu
 
 SRC_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 VERSION="$(grep -m1 '"version"' "$SRC_DIR/package.json" | sed 's/.*: *"\([^"]*\)".*/\1/')"
-EXT_NAME="duck-lang-$VERSION"
+EXT_NAME="ducky-lang-$VERSION"
 
 UNINSTALL=0
 OPTIONAL=0
@@ -67,7 +67,7 @@ for dir in $DIRS; do
     target="$dir/$EXT_NAME"
     if [ "$UNINSTALL" -eq 1 ]; then
         found=0
-        for old in "$dir"/duck-lang-*; do
+        for old in "$dir"/duck-lang-* "$dir"/ducky-lang-*; do
             if [ -d "$old" ]; then
                 rm -rf "$old"
                 echo "removed $old"
@@ -79,7 +79,7 @@ for dir in $DIRS; do
         fi
     else
         # Drop any previously installed version so only one copy is loaded.
-        for old in "$dir"/duck-lang-*; do
+        for old in "$dir"/duck-lang-* "$dir"/ducky-lang-*; do
             if [ -d "$old" ] && [ "$old" != "$target" ]; then
                 rm -rf "$old"
                 echo "removed old $old"

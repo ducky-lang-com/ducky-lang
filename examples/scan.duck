@@ -1,0 +1,302 @@
+// examples/scan.duck - a tiny scanner written in Ducky itself.
+//
+// Same idea as src/lexer.c, but with the language's own tools:
+//   * there is no `char` type, so a byte is a one-byte string: `src[i]`
+//   * there is no substring builtin, so a lexeme is rebuilt with `+`
+//   * there is no `ord`, so classification is membership in a constant set
+//   * there are no arrays of structs yet, so the result is a struct of arrays
+
+const K_EOF = 0;
+const K_IDENT = 1;
+const K_KW = 2;
+const K_INT = 3;
+const K_FLOAT = 4;
+const K_STRING = 5;
+const K_PUNCT = 6;
+
+const LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const DIGITS = "0123456789";
+const PUNCT = "()[]{},;:+-*/%=<>!&|^~.";
+const HEX_LOWER = "abcdef";
+
+struct Tokens {
+    kinds: [int],
+    texts: [string],
+    ivals: [int],   // decoded value of K_INT tokens, 0 elsewhere
+    ok: bool,
+}
+
+fn contains(hay: string, c: string) -> bool {
+    for i in 0..len(hay) {
+        if hay[i] == c {
+            send true;
+        }
+    }
+    send false;
+}
+
+fn is_letter(c: string) -> bool {
+    send contains(LETTERS, c);
+}
+
+fn is_digit(c: string) -> bool {
+    send contains(DIGITS, c);
+}
+
+fn is_ident_char(c: string) -> bool {
+    send is_letter(c) || is_digit(c) || c == "_";
+}
+
+fn is_punct_char(c: string) -> bool {
+    send contains(PUNCT, c);
+}
+
+fn digit_value(c: string) -> int {
+    for i in 0..len(DIGITS) {
+        if DIGITS[i] == c {
+            send i;
+        }
+    }
+    send -1;
+}
+
+fn is_hex(c: string) -> bool {
+    send is_digit(c) || contains(HEX_LOWER, c) || contains("ABCDEF", c);
+}
+
+fn hex_value(c: string) -> int {
+    for i in 0..len(HEX_LOWER) {
+        if HEX_LOWER[i] == c || "ABCDEF"[i] == c {
+            send i + 10;
+        }
+    }
+    send digit_value(c);
+}
+
+fn keyword_kind(w: string) -> int {
+    if w == "fn" || w == "let" || w == "if" || w == "else" || w == "while" ||
+       w == "for" || w == "in" || w == "send" || w == "break" || w == "continue" ||
+       w == "struct" || w == "const" || w == "import" || w == "true" || w == "false" ||
+       w == "int" || w == "float" || w == "bool" || w == "string" {
+        send K_KW;
+    }
+    send K_IDENT;
+}
+
+fn kind_name(k: int) -> string {
+    if k == K_EOF {
+        send "eof";
+    } else if k == K_IDENT {
+        send "ident";
+    } else if k == K_KW {
+        send "kw";
+    } else if k == K_INT {
+        send "int";
+    } else if k == K_FLOAT {
+        send "float";
+    } else if k == K_STRING {
+        send "string";
+    } else if k == K_PUNCT {
+        send "punct";
+    }
+    send "?";
+}
+
+// One pass over `src`, left to right, exactly like the C scanner.
+fn scan(src: string) -> Tokens {
+    let kinds: [int] = [];
+    let texts: [string] = [];
+    let ivals: [int] = [];
+    let n = len(src);
+    let i = 0;
+
+    while i < n {
+        let c = src[i];
+
+        // trivia: spaces and // comments (block comments are not handled here)
+        if c == " " || c == "\t" || c == "\r" || c == "\n" {
+            i = i + 1;
+        } else if c == "/" && i + 1 < n && src[i + 1] == "/" {
+            while i < n && src[i] != "\n" {
+                i = i + 1;
+            }
+
+        // identifier or keyword
+        } else if is_letter(c) || c == "_" {
+            let j = i;
+            let word = "";
+            while j < n && is_ident_char(src[j]) {
+                word = word + src[j];
+                j = j + 1;
+            }
+            kinds = push(kinds, keyword_kind(word));
+            texts = push(texts, word);
+            ivals = push(ivals, 0);
+            i = j;
+
+        // integer (decimal or 0x) or float literal
+        } else if is_digit(c) {
+            let j = i;
+            let text = "";
+            let value = 0;
+            let base = 10;
+            let is_float = false;
+            if c == "0" && j + 2 < n && (src[j + 1] == "x" || src[j + 1] == "X") &&
+               is_hex(src[j + 2]) {
+                base = 16;
+                text = "0x";
+                j = j + 2;
+            }
+            if base == 16 {
+                while j < n && is_hex(src[j]) {
+                    value = value * 16 + hex_value(src[j]);
+                    text = text + src[j];
+                    j = j + 1;
+                }
+            } else {
+                while j < n && is_digit(src[j]) {
+                    value = value * 10 + digit_value(src[j]);
+                    text = text + src[j];
+                    j = j + 1;
+                }
+                // a '.' that starts the ".." range operator does not make a float
+                if j + 1 < n && src[j] == "." && src[j + 1] != "." {
+                    is_float = true;
+                    text = text + ".";
+                    j = j + 1;
+                    while j < n && is_digit(src[j]) {
+                        text = text + src[j];
+                        j = j + 1;
+                    }
+                }
+            }
+            if is_float {
+                kinds = push(kinds, K_FLOAT);
+                ivals = push(ivals, 0);     // no string -> float builtin
+            } else {
+                kinds = push(kinds, K_INT);
+                ivals = push(ivals, value);
+            }
+            texts = push(texts, text);
+            i = j;
+
+        // string literal, decoded while scanning
+        } else if c == "\"" {
+            let j = i + 1;
+            let text = "";
+            let closed = false;
+            while j < n && !closed {
+                let ch = src[j];
+                if ch == "\"" {
+                    closed = true;
+                    j = j + 1;
+                } else if ch == "\n" {
+                    serve("scan error: unterminated string at byte " + str(i));
+                    send Tokens(kinds, texts, ivals, false);
+                } else if ch == "\\" {
+                    j = j + 1;
+                    if j >= n {
+                        serve("scan error: unterminated escape");
+                        send Tokens(kinds, texts, ivals, false);
+                    }
+                    let e = src[j];
+                    if e == "n" {
+                        text = text + "\n";
+                    } else if e == "t" {
+                        text = text + "\t";
+                    } else if e == "r" {
+                        text = text + "\r";
+                    } else if e == "\\" {
+                        text = text + "\\";
+                    } else if e == "\"" {
+                        text = text + "\"";
+                    } else {
+                        serve("scan error: unknown escape \\" + e);
+                        send Tokens(kinds, texts, ivals, false);
+                    }
+                    j = j + 1;
+                } else {
+                    text = text + ch;
+                    j = j + 1;
+                }
+            }
+            if !closed {
+                serve("scan error: unterminated string at byte " + str(i));
+                send Tokens(kinds, texts, ivals, false);
+            }
+            kinds = push(kinds, K_STRING);
+            texts = push(texts, text);
+            ivals = push(ivals, 0);
+            i = j;
+
+        // operators and punctuation, with one character of lookahead
+        } else {
+            let j = i + 1;
+            let op = c;
+            if c == "-" && j < n && src[j] == ">" {
+                op = "->";
+                j = j + 1;
+            } else if c == "=" && j < n && src[j] == "=" {
+                op = "==";
+                j = j + 1;
+            } else if c == "!" && j < n && src[j] == "=" {
+                op = "!=";
+                j = j + 1;
+            } else if c == "<" && j < n && (src[j] == "=" || src[j] == "<") {
+                op = "<" + src[j];
+                j = j + 1;
+            } else if c == ">" && j < n && (src[j] == "=" || src[j] == ">") {
+                op = ">" + src[j];
+                j = j + 1;
+            } else if c == "&" && j < n && src[j] == "&" {
+                op = "&&";
+                j = j + 1;
+            } else if c == "|" && j < n && src[j] == "|" {
+                op = "||";
+                j = j + 1;
+            } else if c == "." && j < n && src[j] == "." {
+                op = "..";
+                j = j + 1;
+            } else if !is_punct_char(c) {
+                serve("scan error: unexpected character '" + c + "' at byte " + str(i));
+                send Tokens(kinds, texts, ivals, false);
+            }
+            kinds = push(kinds, K_PUNCT);
+            texts = push(texts, op);
+            ivals = push(ivals, 0);
+            i = j;
+        }
+    }
+
+    kinds = push(kinds, K_EOF);
+    texts = push(texts, "");
+    ivals = push(ivals, 0);
+    send Tokens(kinds, texts, ivals, true);
+}
+
+fn main() -> int {
+    let source = "fn add(a: int, b: int) -> int {\n" +
+                 "    send a + b;      // sum\n" +
+                 "}\n" +
+                 "let pi = 3.14159;\n" +
+                 "let total = 0x1F;\n" +
+                 "let msg = \"hi\\tduck\";\n" +
+                 "for i in 0..3 { total = total + i; }\n";
+
+    serve("--- source ---");
+    serve(source);
+    serve("--- tokens ---");
+
+    let toks = scan(source);
+    if !toks.ok {
+        send 1;
+    }
+    for t in 0..len(toks.kinds) {
+        let line = kind_name(toks.kinds[t]) + "  " + toks.texts[t];
+        if toks.kinds[t] == K_INT {
+            line = line + "  = " + str(toks.ivals[t]);
+        }
+        serve(line);
+    }
+    send 0;
+}

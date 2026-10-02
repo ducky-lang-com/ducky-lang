@@ -23,6 +23,7 @@ static FILE *O;
 static int depth;        /* values currently pushed, known at compile time */
 static int label_id;     /* unique id for local labels */
 static const char *ret_label; /* epilogue label of the function being emitted */
+static int g_libc;       /* the program declares extern C functions */
 
 /* Innermost enclosing loop: where break/continue jump to. */
 typedef struct {
@@ -197,7 +198,7 @@ static void gen_binary(Expr *e) {
         gen_expr(e->binary.rhs);
         pop_rdi(); /* left operand */
         emit("    mov %%rax, %%rsi\n");
-        emit_call("duck_streq");
+        emit_call("ducky_streq");
         if (op == BOP_NE) emit("    xor $1, %%eax\n");
         return;
     }
@@ -209,7 +210,7 @@ static void gen_binary(Expr *e) {
         gen_expr(e->binary.rhs);
         pop_rdi(); /* left operand */
         emit("    mov %%rax, %%rsi\n");
-        emit_call("duck_concat");
+        emit_call("ducky_concat");
         return;
     }
 
@@ -273,6 +274,80 @@ static void gen_binary(Expr *e) {
     }
 }
 
+/* Calls to C functions: the System V ABI assigns integer-class arguments to
+ * rdi..r9 and float arguments to xmm0..xmm7 independently of their
+ * positions; an argument whose class has run out of registers goes on the
+ * stack, in argument order. Ducky keeps every value in %rax until the call,
+ * so all arguments are pushed first (argument i sits at 8*i(%rsp)), then
+ * placed where C expects them. %al must hold the number of vector registers
+ * in use, which is what variadic functions like printf read. */
+static void gen_call_extern(Expr *e) {
+    Func *fn = e->call.fn;
+    int nargs = e->call.nargs;
+
+    /* The alignment pad is reserved before the pushes: at the call site the
+     * whole argument block is still on the stack and %rsp must be aligned. */
+    int pad = ((depth + nargs) & 1) ? 1 : 0;
+    if (pad) {
+        emit("    sub $8, %%rsp\n");
+        depth++;
+    }
+
+    /* Arguments are evaluated right to left, as in ordinary calls. */
+    for (int i = nargs - 1; i >= 0; i--) {
+        gen_expr(e->call.args[i]);
+        push_rax();
+    }
+
+    /* 1. Register arguments. Everything is already evaluated, so no nested
+     *    call can clobber the registers while we place them. */
+    int gi = 0, xi = 0;
+    for (int i = 0; i < nargs; i++) {
+        if (e->call.args[i]->type == TY_FLOAT) {
+            if (xi < 8) {
+                emit("    movq %d(%%rsp), %%xmm%d\n", 8 * i, xi);
+                xi++;
+            }
+        } else if (gi < 6) {
+            emit("    mov %d(%%rsp), %%%s\n", 8 * i, arg_regs[gi]);
+            gi++;
+        }
+    }
+
+    /* 2. Stack arguments: slide each one down to its compacted slot. Targets
+     *    are always below their sources, so no slot is read twice. */
+    int sidx = 0;
+    gi = 0;
+    xi = 0;
+    for (int i = 0; i < nargs; i++) {
+        int on_stack;
+        if (e->call.args[i]->type == TY_FLOAT) {
+            on_stack = (xi >= 8);
+            if (!on_stack) xi++;
+        } else {
+            on_stack = (gi >= 6);
+            if (!on_stack) gi++;
+        }
+        if (on_stack) {
+            if (sidx != i) {
+                emit("    mov %d(%%rsp), %%rax\n", 8 * i);
+                emit("    mov %%rax, %d(%%rsp)\n", 8 * sidx);
+            }
+            sidx++;
+        }
+    }
+
+    emit("    mov $%d, %%eax\n", xi); /* %al: vector registers in use */
+    emit("    call %s\n", fn->name);
+    if (fn->ret == TY_FLOAT) emit("    movq %%xmm0, %%rax\n");
+
+    int drop = pad + nargs;
+    if (drop > 0) {
+        emit("    add $%d, %%rsp\n", drop * 8);
+        depth -= drop;
+    }
+}
+
 static void gen_call(Expr *e) {
     if (e->call.sdef) {
         /* Struct constructor: one heap block of 8-byte field slots. The
@@ -282,7 +357,7 @@ static void gen_call(Expr *e) {
         int size = 8 * sd->nfields;
         if (size == 0) size = 8; /* an empty struct still owns a block */
         emit("    mov $%d, %%rdi\n", size);
-        emit_call("duck_alloc");
+        emit_call("ducky_alloc");
         emit("    mov %%rax, %d(%%rbp)\n", e->call.slot);
         for (int i = 0; i < sd->nfields; i++) {
             gen_expr(e->call.args[i]);
@@ -300,10 +375,10 @@ static void gen_call(Expr *e) {
             Expr *arg = e->call.args[0];
             gen_expr(arg);
             emit("    mov %%rax, %%rdi\n");
-            const char *rt = arg->type == TY_INT     ? "duck_serve_int"
-                             : arg->type == TY_BOOL  ? "duck_serve_bool"
-                             : arg->type == TY_FLOAT ? "duck_serve_float"
-                                                     : "duck_serve_str";
+            const char *rt = arg->type == TY_INT     ? "ducky_serve_int"
+                             : arg->type == TY_BOOL  ? "ducky_serve_bool"
+                             : arg->type == TY_FLOAT ? "ducky_serve_float"
+                                                     : "ducky_serve_str";
             emit_call(rt);
             break;
         }
@@ -313,20 +388,20 @@ static void gen_call(Expr *e) {
                 emit("    mov (%%rax), %%rax\n"); /* count lives in the header */
             } else {
                 emit("    mov %%rax, %%rdi\n");
-                emit_call("duck_strlen");
+                emit_call("ducky_strlen");
             }
             break;
         case BUILTIN_STR: {
             gen_expr(e->call.args[0]);
             emit("    mov %%rax, %%rdi\n");
             Type t = e->call.args[0]->type;
-            emit_call(t == TY_INT   ? "duck_str_int"
-                      : t == TY_FLOAT ? "duck_str_float"
-                                      : "duck_str_bool");
+            emit_call(t == TY_INT   ? "ducky_str_int"
+                      : t == TY_FLOAT ? "ducky_str_float"
+                                      : "ducky_str_bool");
             break;
         }
         case BUILTIN_INPUT:
-            emit_call("duck_input");
+            emit_call("ducky_input");
             break;
         case BUILTIN_INT:
             gen_expr(e->call.args[0]);
@@ -344,11 +419,36 @@ static void gen_call(Expr *e) {
             gen_expr(e->call.args[1]);
             emit("    mov %%rax, %%rsi\n");
             pop_rdi(); /* array in %rdi, value in %rsi */
-            emit_call("duck_push");
+            emit_call("ducky_push");
+            break;
+        case BUILTIN_SCAN_INT:
+            gen_expr(e->call.args[0]);
+            emit("    mov %%rax, %%rdi\n");
+            emit_call("ducky_scan_int");
+            break;
+        case BUILTIN_SCAN_FLOAT:
+            gen_expr(e->call.args[0]);
+            emit("    mov %%rax, %%rdi\n");
+            emit_call("ducky_scan_float");
+            break;
+        case BUILTIN_SCAN_INT_LINE:
+            emit_call("ducky_input");
+            emit("    mov %%rax, %%rdi\n");
+            emit_call("ducky_scan_int");
+            break;
+        case BUILTIN_SCAN_FLOAT_LINE:
+            emit_call("ducky_input");
+            emit("    mov %%rax, %%rdi\n");
+            emit_call("ducky_scan_float");
             break;
         case BUILTIN_NONE:
             break; /* unreachable (guarded above) */
         }
+        return;
+    }
+
+    if (e->call.fn->is_extern) {
+        gen_call_extern(e);
         return;
     }
 
@@ -447,7 +547,7 @@ static void gen_expr(Expr *e) {
          * elements are evaluated, so array literals nest safely. */
         int size = 8 + 8 * e->array.nelems;
         emit("    mov $%d, %%rdi\n", size);
-        emit_call("duck_alloc");
+        emit_call("ducky_alloc");
         emit("    mov %%rax, %d(%%rbp)\n", e->array.slot);
         emit("    movq $%d, (%%rax)\n", e->array.nelems);
         for (int i = 0; i < e->array.nelems; i++) {
@@ -467,11 +567,11 @@ static void gen_expr(Expr *e) {
         pop_rdi(); /* object in %rdi, index in %rax */
         if (ot == TY_STRING) {
             emit("    mov %%rax, %%rsi\n");
-            emit_call("duck_str_at");
+            emit_call("ducky_str_at");
         } else {
             emit("    mov (%%rdi), %%rcx\n"); /* element count */
             emit("    cmp %%rcx, %%rax\n");
-            emit("    jae duck_oob\n"); /* unsigned: also catches negatives */
+            emit("    jae ducky_oob\n"); /* unsigned: also catches negatives */
             emit("    mov 8(%%rdi, %%rax, 8), %%rax\n");
         }
         break;
@@ -516,7 +616,7 @@ static void gen_stmt(Stmt *s) {
             pop_rdi(); /* object in %rdi, index in %rax */
             emit("    mov (%%rdi), %%rcx\n");
             emit("    cmp %%rcx, %%rax\n");
-            emit("    jae duck_oob\n");
+            emit("    jae ducky_oob\n");
             emit("    lea 8(%%rdi, %%rax, 8), %%rax\n");
             push_rax(); /* &element */
             gen_expr(s->assign.value);
@@ -628,6 +728,8 @@ static void gen_block(Block *b) {
 }
 
 static void gen_func(Func *f, int index) {
+    if (f->is_extern) return; /* declared elsewhere: there is no body to emit */
+
     char ret[64];
     snprintf(ret, sizeof(ret), ".Lret%d", index);
     ret_label = ret;
@@ -666,12 +768,21 @@ static void emit_runtime(void) {
     emit("    xor %%ebp, %%ebp\n");
     emit("    and $-16, %%rsp\n");
     emit("    call main\n");
-    emit("    mov %%rax, %%rdi\n");
+    if (g_libc) {
+        /* Linked against libc: there is no crt runtime here, so flush every
+         * stdio stream ourselves before the raw exit syscall. */
+        emit("    mov %%rax, %%r12\n");     /* exit code while fflush runs */
+        emit("    xor %%edi, %%edi\n");     /* fflush(NULL) */
+        emit("    call fflush\n");
+        emit("    mov %%r12, %%rdi\n");
+    } else {
+        emit("    mov %%rax, %%rdi\n");
+    }
     emit("    mov $60, %%eax\n");
     emit("    syscall\n");
 
     /* serve(value: int) -> writes the decimal value and a newline */
-    emit("\nduck_serve_int:\n");
+    emit("\nducky_serve_int:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    sub $32, %%rsp\n");
@@ -711,7 +822,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* serve(value: bool) -> writes true/false and a newline */
-    emit("\nduck_serve_bool:\n");
+    emit("\nducky_serve_bool:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    test %%rdi, %%rdi\n");
@@ -730,7 +841,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* serve(value: string) -> writes the string and a newline */
-    emit("\nduck_serve_str:\n");
+    emit("\nducky_serve_str:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    mov %%rdi, %%rsi\n");
@@ -754,7 +865,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* streq(a: string, b: string) -> 1 when the contents are equal */
-    emit("\nduck_streq:\n");
+    emit("\nducky_streq:\n");
     emit(".Lse_loop:\n");
     emit("    movb (%%rdi), %%al\n");
     emit("    movb (%%rsi), %%cl\n");
@@ -773,7 +884,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* len(s) -> byte length of a string */
-    emit("\nduck_strlen:\n");
+    emit("\nducky_strlen:\n");
     emit("    xor %%eax, %%eax\n");
     emit(".Lsl_loop:\n");
     emit("    cmpb $0, (%%rdi, %%rax)\n");
@@ -783,14 +894,14 @@ static void emit_runtime(void) {
     emit(".Lsl_done:\n");
     emit("    ret\n");
 
-    /* duck_alloc(size) -> fresh zero page memory from the program break.
+    /* ducky_alloc(size) -> fresh zero page memory from the program break.
      * A bump allocator: memory is never freed (there is no garbage
      * collector); on exhaustion the program stops with a clear message. */
-    emit("\nduck_alloc:\n");
+    emit("\nducky_alloc:\n");
     emit("    push %%rbx\n");
     emit("    push %%r12\n");
     emit("    mov %%rdi, %%rbx\n");           /* rbx = size */
-    emit("    mov duck_brk(%%rip), %%rdi\n");
+    emit("    mov ducky_brk(%%rip), %%rdi\n");
     emit("    test %%rdi, %%rdi\n");
     emit("    jne .La_base\n");
     emit("    xor %%edi, %%edi\n");
@@ -805,14 +916,14 @@ static void emit_runtime(void) {
     emit("    syscall\n");
     emit("    cmp %%rdi, %%rax\n");
     emit("    jb .La_oom\n");                 /* kernel refused: out of memory */
-    emit("    mov %%rdi, duck_brk(%%rip)\n"); /* commit the bump pointer */
+    emit("    mov %%rdi, ducky_brk(%%rip)\n"); /* commit the bump pointer */
     emit("    mov %%r12, %%rax\n");
     emit("    pop %%r12\n");
     emit("    pop %%rbx\n");
     emit("    ret\n");
     emit(".La_oom:\n");
     emit("    lea .Loommsg(%%rip), %%rsi\n");
-    emit("    mov $20, %%edx\n");
+    emit("    mov $21, %%edx\n");
     emit("    mov $2, %%edi\n");
     emit("    mov $1, %%eax\n");              /* sys_write(2, ...) */
     emit("    syscall\n");
@@ -820,19 +931,19 @@ static void emit_runtime(void) {
     emit("    mov $60, %%eax\n");             /* sys_exit(127) */
     emit("    syscall\n");
 
-    /* duck_concat(left, right) -> newly allocated left+right */
-    emit("\nduck_concat:\n");
+    /* ducky_concat(left, right) -> newly allocated left+right */
+    emit("\nducky_concat:\n");
     emit("    push %%rbx\n");
     emit("    push %%r12\n");
     emit("    push %%r13\n");
     emit("    mov %%rdi, %%rbx\n");           /* left */
     emit("    mov %%rsi, %%r12\n");           /* right */
-    emit("    call duck_strlen\n");           /* rdi is still left */
+    emit("    call ducky_strlen\n");           /* rdi is still left */
     emit("    mov %%rax, %%r13\n");
     emit("    mov %%r12, %%rdi\n");
-    emit("    call duck_strlen\n");
+    emit("    call ducky_strlen\n");
     emit("    lea 1(%%r13, %%rax), %%rdi\n"); /* len(left)+len(right)+1 */
-    emit("    call duck_alloc\n");
+    emit("    call ducky_alloc\n");
     emit("    mov %%rax, %%r8\n");            /* dst */
     emit("    cld\n");
     emit("    mov %%rbx, %%rsi\n");           /* copy left ... */
@@ -840,7 +951,7 @@ static void emit_runtime(void) {
     emit("    mov %%r13, %%rcx\n");
     emit("    rep movsb\n");
     emit("    mov %%r12, %%rdi\n");
-    emit("    call duck_strlen\n");           /* ... then right + its NUL */
+    emit("    call ducky_strlen\n");           /* ... then right + its NUL */
     emit("    mov %%rax, %%rcx\n");
     emit("    inc %%rcx\n");
     emit("    mov %%r12, %%rsi\n");
@@ -854,7 +965,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* str(value: int) -> decimal representation on the heap */
-    emit("\nduck_str_int:\n");
+    emit("\nducky_str_int:\n");
     emit("    push %%rbp\n");
     emit("    push %%rbx\n");
     emit("    mov %%rsp, %%rbp\n");
@@ -886,7 +997,7 @@ static void emit_runtime(void) {
     emit("    lea 1(%%rbx), %%rdi\n");
     emit("    push %%r8\n");                  /* src ... */
     emit("    push %%r8\n");                  /* ... twice: keep alignment */
-    emit("    call duck_alloc\n");
+    emit("    call ducky_alloc\n");
     emit("    pop %%rsi\n");                  /* src */
     emit("    pop %%rdx\n");                  /* (discard) */
     emit("    mov %%rax, %%rdi\n");
@@ -902,7 +1013,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* str(value: bool) -> "true" / "false" (never mutated: static) */
-    emit("\nduck_str_bool:\n");
+    emit("\nducky_str_bool:\n");
     emit("    test %%rdi, %%rdi\n");
     emit("    jz .Ltb_false\n");
     emit("    lea .Lstr_true(%%rip), %%rax\n");
@@ -913,7 +1024,7 @@ static void emit_runtime(void) {
 
     /* input_line() -> one line from stdin without the newline. It reads one
      * byte at a time so the next call starts exactly at the next line. */
-    emit("\nduck_input:\n");
+    emit("\nducky_input:\n");
     emit("    push %%rbp\n");
     emit("    push %%r12\n");
     emit("    mov %%rsp, %%rbp\n");
@@ -940,7 +1051,7 @@ static void emit_runtime(void) {
     emit("    mov %%r12, %%rdi\n");
     emit("    sub %%rsp, %%rdi\n");           /* len */
     emit("    inc %%rdi\n");                  /* len + 1 for the NUL */
-    emit("    call duck_alloc\n");
+    emit("    call ducky_alloc\n");
     emit("    mov %%rax, %%rdi\n");           /* dst */
     emit("    mov %%rsp, %%rsi\n");           /* src = buffer */
     emit("    mov %%r12, %%rcx\n");
@@ -953,10 +1064,338 @@ static void emit_runtime(void) {
     emit("    pop %%rbp\n");
     emit("    ret\n");
 
+    /* scan_int(s: string) -> int: C's atoi on a Ducky string. Leading
+     * whitespace is skipped, an optional sign is honoured, digits stop at
+     * the first non-digit; without digits the result is 0 and an
+     * overflowing value clamps to +-INT64_MAX. */
+    emit("\nducky_scan_int:\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    push %%r13\n");
+    emit("    push %%r14\n");
+    emit("    mov %%rdi, %%rbx\n");        /* cursor */
+    emit("    xor %%r12d, %%r12d\n");      /* accumulator */
+    emit("    xor %%r13d, %%r13d\n");      /* sign: 0 = '+', 1 = '-' */
+    emit("    xor %%r14d, %%r14d\n");      /* digits seen */
+    emit(".Lsci_ws:\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    cmp $32, %%al\n");           /* ' ' */
+    emit("    je .Lsci_wsm\n");
+    emit("    cmp $9, %%al\n");            /* \t */
+    emit("    je .Lsci_wsm\n");
+    emit("    cmp $10, %%al\n");           /* \n */
+    emit("    je .Lsci_wsm\n");
+    emit("    cmp $11, %%al\n");           /* \v */
+    emit("    je .Lsci_wsm\n");
+    emit("    cmp $12, %%al\n");           /* \f */
+    emit("    je .Lsci_wsm\n");
+    emit("    cmp $13, %%al\n");           /* \r */
+    emit("    je .Lsci_wsm\n");
+    emit("    jmp .Lsci_sign\n");
+    emit(".Lsci_wsm:\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lsci_ws\n");
+    emit(".Lsci_sign:\n");
+    emit("    cmp $45, %%al\n");           /* '-' */
+    emit("    jne .Lsci_plus\n");
+    emit("    mov $1, %%r13d\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lsci_digit\n");
+    emit(".Lsci_plus:\n");
+    emit("    cmp $43, %%al\n");           /* '+' */
+    emit("    jne .Lsci_digit\n");
+    emit("    inc %%rbx\n");
+    emit(".Lsci_digit:\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    cmp $48, %%al\n");
+    emit("    jb .Lsci_end\n");
+    emit("    cmp $57, %%al\n");
+    emit("    ja .Lsci_end\n");
+    emit("    sub $48, %%eax\n");          /* digit, zero-extended in %rax */
+    emit("    movabs $922337203685477580, %%rcx\n"); /* INT64_MAX / 10 */
+    emit("    cmp %%rcx, %%r12\n");
+    emit("    ja .Lsci_clamp\n");
+    emit("    jb .Lsci_acc\n");
+    emit("    cmp $7, %%eax\n");           /* INT64_MAX % 10 */
+    emit("    ja .Lsci_clamp\n");
+    emit(".Lsci_acc:\n");
+    emit("    imul $10, %%r12, %%r12\n");
+    emit("    add %%rax, %%r12\n");
+    emit("    inc %%r14\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lsci_digit\n");
+    emit(".Lsci_clamp:\n");
+    emit("    movabs $9223372036854775807, %%r12\n");
+    emit(".Lsci_clamp_next:\n");
+    emit("    inc %%rbx\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    cmp $48, %%al\n");
+    emit("    jb .Lsci_end\n");
+    emit("    cmp $57, %%al\n");
+    emit("    ja .Lsci_end\n");
+    emit("    jmp .Lsci_clamp_next\n");
+    emit(".Lsci_end:\n");
+    emit("    test %%r14, %%r14\n");
+    emit("    jz .Lsci_zero\n");           /* no digits: atoi yields 0 */
+    emit("    test %%r13, %%r13\n");
+    emit("    jz .Lsci_pos\n");
+    emit("    neg %%r12\n");
+    emit(".Lsci_pos:\n");
+    emit("    mov %%r12, %%rax\n");
+    emit("    jmp .Lsci_ret\n");
+    emit(".Lsci_zero:\n");
+    emit("    xor %%eax, %%eax\n");
+    emit(".Lsci_ret:\n");
+    emit("    pop %%r14\n");
+    emit("    pop %%r13\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
+    emit("    ret\n");
+
+    /* scan_float(s: string) -> double bits: C's atof on a Ducky string.
+     * Skips whitespace, takes a sign, accepts inf/nan prefixes, keeps 15
+     * significant digits and applies the decimal exponent; without digits
+     * the result is 0.0 and trailing junk is ignored. */
+    emit("\nducky_scan_float:\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    push %%r13\n");
+    emit("    push %%r14\n");
+    emit("    push %%r15\n");
+    emit("    mov %%rdi, %%rbx\n");        /* cursor */
+    emit("    xor %%r12d, %%r12d\n");      /* mantissa (at most 15 digits) */
+    emit("    xor %%r13d, %%r13d\n");      /* sign: 0 = '+', 1 = '-' */
+    emit("    xor %%r14d, %%r14d\n");      /* flags | digits << 8:
+                                            * bit0 seen, bit1 started,
+                                            * bit2 after the decimal point */
+    emit("    xor %%r15d, %%r15d\n");      /* e_base = int digits - skipped zeros */
+    emit(".Lscf_ws:\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    cmp $32, %%al\n");
+    emit("    je .Lscf_wsm\n");
+    emit("    cmp $9, %%al\n");
+    emit("    je .Lscf_wsm\n");
+    emit("    cmp $10, %%al\n");
+    emit("    je .Lscf_wsm\n");
+    emit("    cmp $11, %%al\n");
+    emit("    je .Lscf_wsm\n");
+    emit("    cmp $12, %%al\n");
+    emit("    je .Lscf_wsm\n");
+    emit("    cmp $13, %%al\n");
+    emit("    je .Lscf_wsm\n");
+    emit("    jmp .Lscf_sign\n");
+    emit(".Lscf_wsm:\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lscf_ws\n");
+    emit(".Lscf_sign:\n");
+    emit("    cmp $45, %%al\n");           /* '-' */
+    emit("    jne .Lscf_plus\n");
+    emit("    mov $1, %%r13d\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lscf_special\n");
+    emit(".Lscf_plus:\n");
+    emit("    cmp $43, %%al\n");           /* '+' */
+    emit("    jne .Lscf_special\n");
+    emit("    inc %%rbx\n");
+    /* inf / nan: matched one byte at a time so the scan never reads past
+     * the terminating NUL. */
+    emit(".Lscf_special:\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    or $32, %%eax\n");           /* fold to lower case */
+    emit("    cmp $105, %%eax\n");         /* 'i' */
+    emit("    jne .Lscf_trynan\n");
+    emit("    movzbl 1(%%rbx), %%eax\n");
+    emit("    or $32, %%eax\n");
+    emit("    cmp $110, %%eax\n");         /* 'n' */
+    emit("    jne .Lscf_trynan\n");
+    emit("    movzbl 2(%%rbx), %%eax\n");
+    emit("    or $32, %%eax\n");
+    emit("    cmp $102, %%eax\n");         /* 'f' */
+    emit("    jne .Lscf_trynan\n");
+    emit("    movabs $0x7FF0000000000000, %%rax\n");
+    emit("    jmp .Lscf_spec_done\n");
+    emit(".Lscf_trynan:\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    or $32, %%eax\n");
+    emit("    cmp $110, %%eax\n");         /* 'n' */
+    emit("    jne .Lscf_mant\n");
+    emit("    movzbl 1(%%rbx), %%eax\n");
+    emit("    or $32, %%eax\n");
+    emit("    cmp $97, %%eax\n");          /* 'a' */
+    emit("    jne .Lscf_mant\n");
+    emit("    movzbl 2(%%rbx), %%eax\n");
+    emit("    or $32, %%eax\n");
+    emit("    cmp $110, %%eax\n");         /* 'n' */
+    emit("    jne .Lscf_mant\n");
+    emit("    movabs $0x7FF8000000000000, %%rax\n");
+    emit(".Lscf_spec_done:\n");
+    emit("    test %%r13d, %%r13d\n");
+    emit("    jz .Lscf_done\n");
+    emit("    movabs $0x8000000000000000, %%rdx\n");
+    emit("    xor %%rdx, %%rax\n");
+    emit("    jmp .Lscf_done\n");
+    /* --- mantissa: digits, one decimal point, skipped leading zeros --- */
+    emit(".Lscf_mant:\n");
+    emit("    movzbl (%%rbx), %%eax\n");
+    emit("    cmp $46, %%al\n");           /* '.' */
+    emit("    je .Lscf_dot\n");
+    emit("    cmp $48, %%al\n");
+    emit("    jb .Lscf_tryexp\n");
+    emit("    cmp $57, %%al\n");
+    emit("    ja .Lscf_tryexp\n");
+    emit("    sub $48, %%eax\n");          /* digit, zero-extended in %rax */
+    emit("    or $1, %%r14b\n");           /* digits seen */
+    emit("    test $4, %%r14b\n");
+    emit("    jnz .Lscf_frac\n");
+    emit("    inc %%r15\n");               /* integer digit: e_base++ */
+    emit(".Lscf_frac:\n");
+    emit("    test $2, %%r14b\n");         /* mantissa started? */
+    emit("    jnz .Lscf_acc\n");
+    emit("    test %%eax, %%eax\n");
+    emit("    jz .Lscf_leadzero\n");
+    emit("    or $2, %%r14b\n");           /* first significant digit */
+    emit("    mov %%rax, %%r12\n");
+    emit("    add $256, %%r14\n");         /* digits = 1 */
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lscf_mant\n");
+    emit(".Lscf_leadzero:\n");
+    emit("    dec %%r15\n");               /* skipped zero: e_base-- */
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lscf_mant\n");
+    emit(".Lscf_acc:\n");
+    emit("    mov %%r14, %%rcx\n");
+    emit("    shr $8, %%rcx\n");           /* significant digits kept */
+    emit("    cmp $15, %%rcx\n");
+    emit("    jae .Lscf_drop\n");          /* only 15 digits fit */
+    emit("    imul $10, %%r12, %%r12\n");
+    emit("    add %%rax, %%r12\n");
+    emit("    add $256, %%r14\n");
+    emit(".Lscf_drop:\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lscf_mant\n");
+    emit(".Lscf_dot:\n");
+    emit("    test $4, %%r14b\n");
+    emit("    jnz .Lscf_end\n");           /* second '.': end of number */
+    emit("    or $4, %%r14b\n");
+    emit("    inc %%rbx\n");
+    emit("    jmp .Lscf_mant\n");
+    /* --- exponent: 'e' / 'E', optional sign, at least one digit --- */
+    emit(".Lscf_tryexp:\n");
+    emit("    or $32, %%eax\n");           /* %eax still holds the raw byte */
+    emit("    cmp $101, %%eax\n");         /* 'e' */
+    emit("    jne .Lscf_end\n");
+    emit("    lea 1(%%rbx), %%rsi\n");
+    emit("    xor %%edx, %%edx\n");        /* exponent sign: 0 '+', 1 '-' */
+    emit("    movzbl (%%rsi), %%eax\n");
+    emit("    cmp $45, %%al\n");
+    emit("    jne .Lscf_esign\n");
+    emit("    mov $1, %%edx\n");
+    emit("    inc %%rsi\n");
+    emit("    jmp .Lscf_edigit\n");
+    emit(".Lscf_esign:\n");
+    emit("    cmp $43, %%al\n");
+    emit("    jne .Lscf_edigit\n");
+    emit("    inc %%rsi\n");
+    emit(".Lscf_edigit:\n");
+    emit("    movzbl (%%rsi), %%eax\n");
+    emit("    cmp $48, %%al\n");
+    emit("    jb .Lscf_end\n");            /* 'e' alone: not part of it */
+    emit("    cmp $57, %%al\n");
+    emit("    ja .Lscf_end\n");
+    emit("    xor %%ecx, %%ecx\n");        /* exponent value */
+    emit(".Lscf_eloop:\n");
+    emit("    movzbl (%%rsi), %%eax\n");
+    emit("    cmp $48, %%al\n");
+    emit("    jb .Lscf_eapply\n");
+    emit("    cmp $57, %%al\n");
+    emit("    ja .Lscf_eapply\n");
+    emit("    sub $48, %%eax\n");
+    emit("    imul $10, %%rcx, %%rcx\n");
+    emit("    add %%rax, %%rcx\n");
+    emit("    cmp $400, %%ecx\n");         /* saturate; any value past the */
+    emit("    jle .Lscf_econt\n");         /* thresholds lands the same way */
+    emit("    mov $400, %%ecx\n");
+    emit(".Lscf_econt:\n");
+    emit("    inc %%rsi\n");
+    emit("    jmp .Lscf_eloop\n");
+    emit(".Lscf_eapply:\n");
+    emit("    test %%edx, %%edx\n");
+    emit("    jz .Lscf_eok\n");
+    emit("    neg %%rcx\n");
+    emit(".Lscf_eok:\n");
+    emit("    mov %%rsi, %%rbx\n");        /* commit the cursor */
+    emit("    jmp .Lscf_eval\n");
+    emit(".Lscf_end:\n");
+    emit("    xor %%ecx, %%ecx\n");        /* no exponent */
+    /* --- value = mantissa * 10^(e_base - digits + exponent) --- */
+    emit(".Lscf_eval:\n");
+    emit("    test $1, %%r14b\n");         /* any digit at all? */
+    emit("    jz .Lscf_fail\n");           /* no conversion: 0.0 */
+    emit("    test %%r12, %%r12\n");
+    emit("    jz .Lscf_zero\n");           /* mantissa is zero: +-0.0 */
+    emit("    mov %%r15, %%rsi\n");
+    emit("    mov %%r14, %%rdx\n");
+    emit("    shr $8, %%rdx\n");
+    emit("    sub %%rdx, %%rsi\n");
+    emit("    add %%rcx, %%rsi\n");        /* decimal exponent in %rsi */
+    emit("    cmp $309, %%rsi\n");
+    emit("    jge .Lscf_inf\n");
+    emit("    cmp $-340, %%rsi\n");
+    emit("    jle .Lscf_zero\n");
+    emit("    cvtsi2sd %%r12, %%xmm0\n");
+    emit("    cmp $0, %%rsi\n");
+    emit("    jge .Lscf_pos_exp\n");
+    emit("    cmp $-308, %%rsi\n");
+    emit("    jl .Lscf_neg_split\n");
+    emit("    neg %%rsi\n");               /* 10^-e, index 1..308 */
+    emit("    lea .Lipow10(%%rip), %%rdx\n");
+    emit("    mulsd (%%rdx,%%rsi,8), %%xmm0\n");
+    emit("    jmp .Lscf_bits\n");
+    emit(".Lscf_neg_split:\n");            /* e < -308: split the scaling so
+                                            * a subnormal product survives */
+    emit("    lea .Lipow10(%%rip), %%rdx\n");
+    emit("    mulsd 2464(%%rdx), %%xmm0\n");   /* 10^-308 (308 * 8) */
+    emit("    neg %%rsi\n");
+    emit("    sub $308, %%rsi\n");         /* index 1..31 */
+    emit("    mulsd (%%rdx,%%rsi,8), %%xmm0\n");
+    emit("    jmp .Lscf_bits\n");
+    emit(".Lscf_pos_exp:\n");
+    emit("    lea .Lpow10(%%rip), %%rdx\n");
+    emit("    mulsd (%%rdx,%%rsi,8), %%xmm0\n");
+    emit(".Lscf_bits:\n");
+    emit("    movq %%xmm0, %%rax\n");
+    emit("    test %%r13d, %%r13d\n");
+    emit("    jz .Lscf_done\n");
+    emit("    movabs $0x8000000000000000, %%rdx\n");
+    emit("    xor %%rdx, %%rax\n");
+    emit("    jmp .Lscf_done\n");
+    emit(".Lscf_inf:\n");
+    emit("    movabs $0x7FF0000000000000, %%rax\n");
+    emit("    test %%r13d, %%r13d\n");
+    emit("    jz .Lscf_done\n");
+    emit("    movabs $0x8000000000000000, %%rdx\n");
+    emit("    xor %%rdx, %%rax\n");
+    emit("    jmp .Lscf_done\n");
+    emit(".Lscf_zero:\n");
+    emit("    xor %%eax, %%eax\n");        /* +0.0 */
+    emit("    test %%r13d, %%r13d\n");
+    emit("    jz .Lscf_done\n");
+    emit("    movabs $0x8000000000000000, %%rax\n"); /* -0.0 */
+    emit("    jmp .Lscf_done\n");
+    emit(".Lscf_fail:\n");                 /* no conversion: always +0.0 */
+    emit("    xor %%eax, %%eax\n");
+    emit(".Lscf_done:\n");
+    emit("    pop %%r15\n");
+    emit("    pop %%r14\n");
+    emit("    pop %%r13\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
+    emit("    ret\n");
+
     /* A bounds check failed: explain and stop (like the OOM path). */
-    emit("\nduck_oob:\n");
+    emit("\nducky_oob:\n");
     emit("    lea .Loobmsg(%%rip), %%rsi\n");
-    emit("    mov $26, %%edx\n");
+    emit("    mov $27, %%edx\n");
     emit("    mov $2, %%edi\n");
     emit("    mov $1, %%eax\n");
     emit("    syscall\n");
@@ -966,7 +1405,7 @@ static void emit_runtime(void) {
 
     /* str_at(s, i) -> one-byte heap string holding s[i]; checks the
      * range first (negative indexes wrap high and are caught too). */
-    emit("\nduck_str_at:\n");
+    emit("\nducky_str_at:\n");
     emit("    push %%rbx\n");
     emit("    push %%r12\n");
     emit("    push %%r13\n");                 /* also aligns for the call */
@@ -980,9 +1419,9 @@ static void emit_runtime(void) {
     emit("    jmp .Lsa_len\n");
     emit(".Lsa_done:\n");
     emit("    cmp %%rax, %%r12\n");           /* index - len (unsigned) */
-    emit("    jae duck_oob\n");
+    emit("    jae ducky_oob\n");
     emit("    mov $2, %%rdi\n");
-    emit("    call duck_alloc\n");
+    emit("    call ducky_alloc\n");
     emit("    movb (%%rbx, %%r12), %%cl\n");
     emit("    movb %%cl, (%%rax)\n");
     emit("    movb $0, 1(%%rax)\n");
@@ -993,7 +1432,7 @@ static void emit_runtime(void) {
 
     /* push(array, value) -> a new array with the value appended. The old
      * array is left untouched, so existing references keep their data. */
-    emit("\nduck_push:\n");
+    emit("\nducky_push:\n");
     emit("    push %%rbx\n");
     emit("    push %%r12\n");
     emit("    push %%r13\n");
@@ -1001,7 +1440,7 @@ static void emit_runtime(void) {
     emit("    mov %%rsi, %%r12\n");           /* value */
     emit("    mov (%%rbx), %%r13\n");         /* count */
     emit("    lea 16(, %%r13, 8), %%rdi\n");  /* 8 + 8 * (count + 1) */
-    emit("    call duck_alloc\n");
+    emit("    call ducky_alloc\n");
     emit("    lea 8(, %%r13, 8), %%rcx\n");   /* bytes of the old block */
     emit("    mov %%rbx, %%rsi\n");
     emit("    mov %%rax, %%rdi\n");
@@ -1021,7 +1460,7 @@ static void emit_runtime(void) {
      * form: 15 significant digits with rounding, trailing zeros trimmed,
      * exponent notation outside [1e-15, 1e18]. NaN -> "nan",
      * infinity -> "inf"/"-inf", zero -> "0". */
-    emit("\nduck_fmt_float:\n");
+    emit("\nducky_fmt_float:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    push %%rbx\n");
@@ -1326,12 +1765,12 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* serve(value: float) -> writes the decimal form and a newline */
-    emit("\nduck_serve_float:\n");
+    emit("\nducky_serve_float:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    sub $80, %%rsp\n");
     emit("    lea -80(%%rbp), %%rsi\n");      /* buffer (rdi = bits) */
-    emit("    call duck_fmt_float\n");
+    emit("    call ducky_fmt_float\n");
     emit("    mov %%rax, %%rdx\n");
     emit("    lea -80(%%rbp), %%rsi\n");
     emit("    mov $1, %%eax\n");
@@ -1347,16 +1786,16 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* str(value: float) -> the decimal form on the heap */
-    emit("\nduck_str_float:\n");
+    emit("\nducky_str_float:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    push %%rbx\n");                 /* %rbx holds the length */
     emit("    sub $88, %%rsp\n");
     emit("    lea -88(%%rbp), %%rsi\n");      /* buffer (rdi = bits) */
-    emit("    call duck_fmt_float\n");
+    emit("    call ducky_fmt_float\n");
     emit("    mov %%rax, %%rbx\n");
     emit("    lea 1(%%rbx), %%rdi\n");        /* + 1 for the NUL */
-    emit("    call duck_alloc\n");
+    emit("    call ducky_alloc\n");
     emit("    mov %%rax, %%rdi\n");
     emit("    lea -88(%%rbp), %%rsi\n");
     emit("    mov %%rbx, %%rcx\n");
@@ -1390,7 +1829,16 @@ void generate(const SourceFile *src, Program *prog, FILE *out) {
     label_id = 0;
     nstrs = 0;
 
-    emit("/* Generated by duckc %s from %s - do not edit. */\n", DUCKC_VERSION, src->path);
+    /* Extern declarations pull in the C library at link time. */
+    g_libc = 0;
+    for (int i = 0; i < prog->nfuncs; i++) {
+        if (prog->funcs[i]->is_extern) {
+            g_libc = 1;
+            break;
+        }
+    }
+
+    emit("/* Generated by duckyc %s from %s - do not edit. */\n", DUCKYC_VERSION, src->path);
     emit("    .section .note.GNU-stack,\"\",@progbits\n");
     emit("    .text\n");
 
@@ -1405,10 +1853,33 @@ void generate(const SourceFile *src, Program *prog, FILE *out) {
     emit(".Lstr_true:\n    .string \"true\"\n");
     emit(".Lstr_false:\n    .string \"false\"\n");
     emit(".Lempty:\n    .string \"\"\n");
-    emit(".Loommsg:\n    .ascii \"duck: out of memory\\n\"\n");
-    emit(".Loobmsg:\n    .ascii \"duck: index out of bounds\\n\"\n");
+    emit(".Loommsg:\n    .ascii \"ducky: out of memory\\n\"\n");
+    emit(".Loobmsg:\n    .ascii \"ducky: index out of bounds\\n\"\n");
     emit(".Ldten:\n    .quad 0x4024000000000000\n");  /* 10.0 */
     emit(".Ldfone:\n    .quad 0x3FF0000000000000\n"); /* 1.0  */
+    /* Powers of ten for scan_float: .Lpow10[i] = 10^i, .Lipow10[i] = 10^-i.
+     * The bit patterns are computed here with strtod so the tables match
+     * the host's rounding exactly. */
+    emit(".Lpow10:\n");
+    for (int i = 0; i <= 308; i++) {
+        char buf[32];
+        unsigned long long bits;
+        double v;
+        snprintf(buf, sizeof buf, "1e%d", i);
+        v = strtod(buf, NULL);
+        memcpy(&bits, &v, sizeof bits);
+        emit("    .quad 0x%016llx\n", bits);
+    }
+    emit(".Lipow10:\n");
+    for (int i = 0; i <= 340; i++) {
+        char buf[32];
+        unsigned long long bits;
+        double v;
+        snprintf(buf, sizeof buf, "1e-%d", i);
+        v = strtod(buf, NULL);
+        memcpy(&bits, &v, sizeof bits);
+        emit("    .quad 0x%016llx\n", bits);
+    }
     for (int i = 0; i < nstrs; i++) {
         emit("%s:\n    .string \"", strs[i].label);
         emit_string_bytes(strs[i].text);
@@ -1417,5 +1888,5 @@ void generate(const SourceFile *src, Program *prog, FILE *out) {
 
     emit("\n    .section .bss\n");
     emit("    .align 8\n");
-    emit("duck_brk:\n    .zero 8\n");
+    emit("ducky_brk:\n    .zero 8\n");
 }

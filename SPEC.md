@@ -1,27 +1,28 @@
-# Duck Language Specification
+# Ducky Language Specification
 
-**Version 0.6.0** — this document defines the syntax and semantics accepted by
-`duckc`, the Duck compiler.
+**Version 0.7.0** — this document defines the syntax and semantics accepted by
+`duckyc`, the Ducky compiler.
 
-Duck is a small, statically typed, imperative language. It compiles straight to
-x86-64 machine code (Linux, System V AMD64 ABI) with no runtime and no C
-library behind it.
+Ducky is a small, statically typed, imperative language. It compiles straight to
+x86-64 machine code (Linux, System V AMD64 ABI). Programs built from Ducky
+features alone are freestanding: no runtime, no C library behind them.
+`extern` declarations (§4.3) opt into the C library instead.
 
-Its keywords are the English spellings `fn`, `struct`, `import`, `const`,
-`let`, `if`, `else`, `while`, `for`, `in`, `send`, `break` and `continue`,
-plus `true`/`false` and the type names `int`, `float`, `bool` and `string`.
-The output builtin is `serve`. The Duck-era words `wing`, `nest`, `when` and
-`otherwise` (canonical only in v0.2.0) and the older `return` and `print` are
-ordinary identifiers now.
+Its keywords are the English spellings `fn`, `extern`, `struct`, `import`,
+`const`, `let`, `if`, `else`, `while`, `for`, `in`, `send`, `break` and
+`continue`, plus `true`/`false` and the type names `int`, `float`, `bool` and
+`string`. The output builtin is `serve`. The retired words `wing`, `nest`,
+`when` and `otherwise` (canonical only in v0.2.0) and the older `return` and
+`print` are ordinary identifiers now.
 
 ---
 
-## 1. Hello, Duck
+## 1. Hello, Ducky
 
 ```duck
 // hello.duck
 fn main() -> int {
-    serve("Hello, Duck!");
+    serve("Hello, Ducky!");
     send 0;
 }
 ```
@@ -29,7 +30,7 @@ fn main() -> int {
 Compile and run:
 
 ```sh
-./duckc hello.duck -o hello
+./duckyc hello.duck -o hello
 ./hello
 ```
 
@@ -69,18 +70,18 @@ Identifiers are case sensitive.
 
 | | | |
 |---|---|---|
-| `fn` | `struct` | `import` |
-| `const` | `let` | `if` |
-| `else` | `while` | `for` |
-| `in` | `send` | `break` |
-| `continue` | `true` | `false` |
-| `int` | `float` | `bool` |
-| `string` | | |
+| `fn` | `extern` | `struct` |
+| `import` | `const` | `let` |
+| `if` | `else` | `while` |
+| `for` | `in` | `send` |
+| `break` | `continue` | `true` |
+| `false` | `int` | `float` |
+| `bool` | `string` | |
 
 The retired words `wing`, `nest`, `when`, `otherwise`, `return` and `print`
 are **not** keywords: they parse as ordinary identifiers, so `wingman` or a
 variable named `nest` are valid names. Using them where syntax is expected is
-an error that names the replacement (`'wing' is not a Duck keyword anymore -
+an error that names the replacement (`'wing' is not a Ducky keyword anymore -
 use 'fn' instead`).
 
 ### 2.5 Integer literals
@@ -155,7 +156,7 @@ let fs: [float] = [];      // empty, only with an annotation
 * **Length** comes from `len(array)`; it never changes.
 * **Elements** are read with `xs[i]` and written with `xs[i] = v`. Every
   access is bounds-checked at run time: an index outside `0 .. len-1`
-  (including negative indexes) prints `duck: index out of bounds` to standard
+  (including negative indexes) prints `ducky: index out of bounds` to standard
   error and exits with status `127`.
 * **Arrays are references.** `let ys = xs` makes `ys` point at the same block,
   so `xs[0] = 7` is visible through `ys`. `push(xs, v)` is the exception: it
@@ -212,9 +213,10 @@ struct Point {
 
 ## 4. Program structure
 
-A program starts from the single file given to `duckc`. That file is a
-sequence of top-level declarations: **functions** (`fn`), **structs**
-(`struct`), **constants** (`const`) and **imports** (`import`, §4.2). There
+A program starts from the single file given to `duckyc`. That file is a
+sequence of top-level declarations: **functions** (`fn`), **extern
+declarations** (`extern`, §4.3), **structs** (`struct`), **constants**
+(`const`) and **imports** (`import`, §4.2). There
 are no mutable globals: **the entry point is**
 
 ```duck
@@ -235,7 +237,7 @@ const RATE = 0.25;
 
 * The initializer must be a **single literal** (`int`, `float`, `bool` or
   `string`) — no expressions and no other constants in it (v0.4.0).
-* The name must be a plain identifier: it may not start with `_` or `duck_`,
+* The name must be a plain identifier: it may not start with `_` or `ducky_`,
   may not be a builtin, and may not collide with a function, a struct or
   another constant.
 * Declaration order does not matter: a constant may be used before its
@@ -282,6 +284,51 @@ import "../shared/types.duck";
 * Each file is parsed with its own token stream, so errors always name the
   file, line and column they occur in - a type error in an imported file is
   reported against that file, not against the root.
+
+### 4.3 Extern declarations and the C library
+
+```duck
+extern fn printf(fmt: string, ...) -> int;
+extern fn abs(n: int) -> int;
+extern fn sqrt(x: float) -> float;
+extern fn srand(seed: int);
+```
+
+* An `extern fn` **declares** a C function; it has no body and ends with `;`
+  (v0.7.0). The compiler never generates a definition: the program is linked
+  with the C library and the symbol resolves at link time.
+* Parameter and return types are limited to `int`, `float`, `bool` and
+  `string`, plus no return type at all (`void`). Arrays and structs have no
+  C ABI mapping and are rejected.
+* A trailing `...` marks the C **variadic** form (`printf`-style) and must
+  come last. Calls must pass **at least** the fixed parameters; every extra
+  argument must be `int`, `float`, `bool` or `string`.
+* At the call site the System V AMD64 ABI is honored: `int`/`bool`/`string`
+  arguments go into `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9` in argument order
+  and `float` arguments into `xmm0`…`xmm7` in argument order; an argument
+  whose class has exhausted its registers goes on the stack, again in
+  argument order. `%al` carries the number of vector registers used, which is
+  what variadic functions such as `printf` read to find floating-point
+  arguments. A `float` result comes back in `xmm0`.
+* A Ducky `string` argument becomes a `char *`; a `string` result is taken as
+  a `char *` and must be NUL-terminated. Ducky `int` is 64-bit (`long` on
+  Linux); a C function that returns a plain 32-bit `int` still works in
+  practice, but formally only the low half is meaningful.
+* `extern` declarations live at the top level, may appear in any file of the
+  program (§4.2 shares them through the global namespace) and follow the same
+  duplicate-name and reserved-name rules as `fn`.
+* `main` may **not** be declared `extern`: the entry point must be defined in
+  Ducky.
+* The driver links a program that declares `extern` with
+  `cc -nostartfiles -lm`, so the executable becomes a dynamically linked ELF
+  that needs the C library at run time. Programs without `extern` keep the
+  raw `ld` link and stay freestanding (§11).
+* Output ordering caveat: `serve` writes immediately through a raw `write`
+  syscall, while `printf` goes through the C library's stdout buffer — which
+  is flushed only when it fills or at program exit (a program with `extern`
+  flushes it before exiting). When stdout is not a terminal, all `printf`
+  output therefore appears after all `serve` output. Prefer one output style
+  per program.
 
 ---
 
@@ -509,6 +556,10 @@ arity and argument types must match exactly. A call whose function returns
 | `float(x)` | `float` | Converts an `int` to `float` (exact for values up to 2^53). |
 | `int(x)` | `int` | Converts a `float` to `int`, truncating toward zero. |
 | `push(a, v)` | array | Returns a **new** array with `v` appended to `a`; `a` must be an array and `v` its element type. |
+| `scan_int(s)` | `int` | Parses `s` like C's `atoi` (v0.7.0): skips leading whitespace, accepts an optional `+`/`-`, then decimal digits stopping at the first non-digit (hex is **not** recognized: `scan_int("0x10")` is `0`). No digits gives `0`; a value too large for `int` clamps to ±9223372036854775807. |
+| `scan_float(s)` | `float` | Parses `s` like C's `atof` (v0.7.0): whitespace, optional sign, then a decimal number with an optional `.` and `e`/`E` exponent, keeping the first 15 significant digits. No digits gives `0.0`; trailing junk is ignored; `inf` and `nan` are accepted (case-insensitively, as prefixes); overflow yields ±`inf`, underflow `0.0`. |
+| `scan_int_line()` | `int` | Equivalent to `scan_int(input_line())`: reads one line from standard input and parses it. |
+| `scan_float_line()` | `float` | Equivalent to `scan_float(input_line())`: reads one line from standard input and parses it. |
 
 `str` returns a fresh string on the heap (except the constant `true`/`false`,
 which points at static memory), so it can be concatenated freely. Builtins
@@ -519,10 +570,12 @@ cannot be redefined as user functions, structs or constants.
 ## 8. Grammar (EBNF)
 
 ```ebnf
-program      := { import-decl | func-decl | struct-decl | const-decl } ;
+program      := { import-decl | func-decl | extern-decl | struct-decl | const-decl } ;
 
 import-decl  := "import" STRING ";" ;
 func-decl    := "fn" IDENT "(" [ param-list ] ")" [ "->" type ] block ;
+extern-decl  := "extern" "fn" IDENT "(" [ extern-params ] ")" [ "->" type ] ";" ;
+extern-params := "..." | param { "," param } [ "," "..." ] ;
 param-list   := param { "," param } ;
 param        := IDENT ":" type ;
 struct-decl  := "struct" IDENT "{" [ field-list ] "}" ;
@@ -583,14 +636,16 @@ array-literal := "[" [ expr { "," expr } ] "]" ;
 
 * All keywords in §2.4.
 * The builtin function names `serve`, `len`, `str`, `input_line`, `float`,
-  `int` and `push` (they cannot be redefined).
+  `int`, `push`, `scan_int`, `scan_float`, `scan_int_line` and
+  `scan_float_line` (they cannot be redefined).
 * Function, constant, struct and field names starting with `_`.
-* Function, constant, struct and field names starting with `duck_` (the
-  generated runtime owns `duck_serve_int`, `duck_serve_bool`, `duck_serve_str`,
-  `duck_serve_float`, `duck_streq`, `duck_strlen`, `duck_alloc`, `duck_concat`,
-  `duck_str_int`, `duck_str_bool`, `duck_str_float`, `duck_fmt_float`,
-  `duck_str_at`, `duck_push`, `duck_oob`, `duck_input` and the data symbol
-  `duck_brk`).
+* Function, constant, struct and field names starting with `ducky_` (the
+  generated runtime owns `ducky_serve_int`, `ducky_serve_bool`, `ducky_serve_str`,
+  `ducky_serve_float`, `ducky_streq`, `ducky_strlen`, `ducky_alloc`, `ducky_concat`,
+  `ducky_str_int`, `ducky_str_bool`, `ducky_str_float`, `ducky_fmt_float`,
+  `ducky_str_at`, `ducky_push`, `ducky_oob`, `ducky_input`, `ducky_scan_int`,
+  `ducky_scan_float` and the data symbol `ducky_brk`). The pre-rename `duck_`
+  prefix is free again as of v0.7.0.
 * Function and struct names may not collide with each other or with a
   constant; field names live in their own namespace (accessed through `.`).
 
@@ -617,24 +672,32 @@ The compiler stops at the first error and exits with status `1`.
 
 ## 11. Execution model
 
-The generated executable is a freestanding ELF binary:
+A program that declares no `extern` functions (§4.3) becomes a freestanding
+ELF binary:
 
 * entry point `_start` calls `main` and exits with its value through the
   `exit` syscall (number 60);
 * `serve` writes directly with syscall 1; `input_line` reads with syscall 0;
 * no libc, no interpreter, no virtual machine.
 
+A program that declares `extern` functions links through
+`cc -nostartfiles -lm`, so the executable is a dynamically linked ELF that
+needs the C library at run time. The generated Ducky code is the same either
+way: only the link step differs, plus `_start` flushing stdio
+(`fflush(NULL)`) before the exit syscall so `printf` output is not lost.
+
 **Memory.** Strings produced by `+`, by `str` and by `input_line`, and all
 array blocks, come from a small bump allocator that grows the program break
 (`brk` syscall). Memory is never freed — there is no garbage collector. If
-the program exhausts memory it writes `duck: out of memory` to standard error
+the program exhausts memory it writes `ducky: out of memory` to standard error
 and exits with status `127`.
 
 **Arrays.** An array is one heap block laid out as
 `[count:int64][elem0]…[elemN-1]`; the variable holds a pointer, so copies
 share the block. Every read and write checks `0 <= index < count`
 (unsignedly, so negatives are caught) and exits with
-`duck: index out of bounds` and status `127` on failure. `push` allocates a
+`ducky: index out of bounds` and status `127` on failure. `push` allocates a
 new block and copies the old contents.
 
-Requirements: Linux x86-64, GNU `as` and `ld` to assemble and link.
+Requirements: Linux x86-64, GNU `as` and `ld` to assemble and link, plus a C
+toolchain (`cc`) when the program declares `extern` functions.

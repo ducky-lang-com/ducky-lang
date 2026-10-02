@@ -1,4 +1,4 @@
-# Duck — Requirements & Roadmap
+# Ducky — Requirements & Roadmap
 
 This file tracks the requirements of the project: what the initial milestone
 delivered and what the next releases target.
@@ -18,11 +18,11 @@ compiler built from scratch.
 | T2 | Pipeline: lexer → parser → semantic analysis → code generator | done |
 | T3 | Emit x86-64 assembly (AT&T syntax, System V AMD64 ABI) | done |
 | T4 | Assemble with GNU `as`, link with `ld`, produce a native ELF executable | done |
-| T5 | `duckc` CLI: `-o`, `-S/--emit-asm`, `--dump-tokens`, `--version`, `--help` | done |
+| T5 | `duckyc` CLI: `-o`, `-S/--emit-asm`, `--dump-tokens`, `--version`, `--help` | done |
 | T6 | Freestanding output: `_start`, raw `write`/`exit` syscalls, no libc | done |
 | T7 | Error reporting with `file:line:col`, source excerpt and caret | done |
 | T8 | Installer: `install.sh` (one-liner via curl, `--user`/`--prefix`/`--no-editor`/`--uninstall`) that installs the compiler **and** the editor extension; `make install`/`uninstall` do the same | done |
-| T9 | Updater: `update.sh`, installed as the `duck-update` command (`--check` compares the stamped commit with `origin/main`, `git pull --ff-only` from a checkout, curl-able from anywhere); `make update` | done |
+| T9 | Updater: `update.sh`, installed as the `ducky-update` command (`--check` compares the stamped commit with `origin/main`, `git pull --ff-only` from a checkout, curl-able from anywhere); `make update` | done |
 
 ### Language
 
@@ -55,7 +55,7 @@ compiler built from scratch.
 **Test count: 22 (10 runtime + 12 error), all passing.**
 
 **Update v0.2.0 (breaking, superseded):** the keywords were renamed to
-Duck-native words (`fn` → `wing`, `let` → `nest`, `if` → `when`, `else` →
+Ducky-native words (`fn` → `wing`, `let` → `nest`, `if` → `when`, `else` →
 `otherwise`), keeping `send` and `serve`. v0.3.0 reverted the four renames to
 their English spellings after feedback, so `wing`, `nest`, `when` and
 `otherwise` are ordinary identifiers again (with a hint when used as syntax);
@@ -70,7 +70,7 @@ all passing.**
 |---|---|---|
 | N1 | `for` loops (`for i in a .. b`) | done — v0.3.0; dedicated codegen (bounds evaluated once into a hidden slot), empty ranges, scoped loop variable |
 | N2 | Floats (`f64`) | done — v0.4.0; `float` type + literals (`1.5`, `1e-4`), SSE2 arithmetic/comparisons (IEEE-754, incl. NaN rules), runtime formatter (15 rounded significant digits, exponent outside `[1e-15, 1e18)`, `inf`/`nan`), `float(x)`/`int(x)` conversions |
-| N3 | Arrays (`[int]`) with `len`, indexing, bounds | done — v0.4.0; all four element types, `[count][elems…]` heap blocks over the `brk` bump allocator, bounds-checked reads/writes (`duck: index out of bounds`, exit 127), reference semantics, `push()` copy-on-append, nested literals via hidden stack slots |
+| N3 | Arrays (`[int]`) with `len`, indexing, bounds | done — v0.4.0; all four element types, `[count][elems…]` heap blocks over the `brk` bump allocator, bounds-checked reads/writes (`ducky: index out of bounds`, exit 127), reference semantics, `push()` copy-on-append, nested literals via hidden stack slots |
 | N4 | String operations: `+` concatenation, `len`, indexing | done — v0.4.0; `+`/`len()` in v0.3.0, `s[i]` returns a one-byte string (bounds-checked) |
 | N5 | Standard input: `input_line()` reading from stdin | done — v0.3.0; `read` syscall, one line per call, EOF → `""` |
 | N6 | Multiple source files / `import` | done — v0.6.0; top-level `import "path.duck";` (new keyword), paths relative to the importing file, the whole import graph is loaded depth first and deduplicated by canonical path (diamonds and cycles load a file once), all files share one global namespace (declarations are merged before analysis, so cross-file calls/structs/constants and cross-file name collisions behave exactly like intra-file ones), every file is parsed with its own tokens so diagnostics name the file they occur in; rejected: `import` outside the top level, missing file, directory, non-string path. Compiles the merged program as one unit rather than linking several `.o` (per-file objects stay a future option) |
@@ -82,6 +82,8 @@ all passing.**
 | N12 | File icon for `.duck` files in the explorer | done — declared as the language icon (light/dark); works with themes that have specific file icons (e.g. the default Seti) without replacing them |
 | N13 | Bitwise operators `&` `\|` `^` `~` `<<` `>>` | done — v0.3.0; C precedence, arithmetic `>>`, `int` only |
 | N14 | `str()` builtin (`int`/`bool` → `string`) | done — v0.3.0; extended to `float` in v0.4.0 |
+| N15 | Input parsing builtins: `scan_int` / `scan_float` (+ `_line`) | done — v0.7.0; `scan_int(s)` parses a `string` C `atoi`-style (whitespace, optional sign, decimal only, stops at the first invalid char; no digits → `0`, overflow clamps to ±INT64_MAX) and `scan_float(s)` parses C `atof`-style (15 significant digits, `.` and `e` exponents, `inf`/`nan` accepted case-insensitively, overflow → ±inf, underflow → `0.0`, trailing junk ignored, no digits → `0.0`); `scan_int_line()` / `scan_float_line()` read one line from stdin first; parse failure is never a runtime error |
+| N16 | `extern fn ...;` declarations, link against the C library | done — v0.7.0; `extern fn printf(fmt: string, ...) -> int;` ends with `;` and has no body, signature limited to `int`/`float`/`bool`/`string` (plus no return type), variadic `...` with a minimum-arity check and scalar/string extra arguments, System V-correct marshalling (int/bool/string → `rdi…r9` in order, `float` → `xmm0…xmm7` in order, register exhaustion falls back to the stack in argument order, `%al` = vector-register count for variadics), float returns arrive in `xmm0` → `%rax`; the driver links with `cc -nostartfiles -lm` only when the program declares `extern` (pure programs keep the raw `ld` link and stay freestanding) and `_start` flushes stdio before the exit syscall; rejected: `extern fn main`, array/struct in the signature |
 
 **Update v0.4.0:** floats, arrays (with string indexing), `const`, `push()`
 and the numeric conversions. The suite is then **59 tests (22 runtime + 37
@@ -97,6 +99,13 @@ deduplicated loading (diamonds and cycles), one global namespace across
 files (functions, structs, constants and `main` may live anywhere) and
 per-file diagnostics. The suite is now **85 tests (24 runtime + 61 error),
 all passing.**
+
+**Update v0.7.0:** the **rename to Ducky** — project and language Ducky,
+compiler `duckyc`, runtime prefix `ducky_`, messages `ducky:`, repository
+`ducky-lang-com/ducky-lang`, extension `ducky-lang` (the source extension
+stays `.duck`), plus the four `scan_*` builtins (N15) and `extern`
+declarations with C-library linking (N16). The suite is now **99 tests
+(26 runtime + 73 error), all passing.**
 
 ## Milestone M2 — Engineering
 
@@ -114,13 +123,13 @@ all passing.**
 | # | Requirement | Notes |
 |---|---|---|
 | A1 | Direct machine-code emission (own ELF writer, no `as`/`ld`) | |
-| A2 | Self-hosting: rewrite `duckc` in Duck | needs A1… and M1 features |
+| A2 | Self-hosting: rewrite `duckyc` in Ducky | needs A1… and M1 features |
 | A3 | Package manager and standard library | |
 
-## Milestone M4 — Bare metal: a Duck kernel
+## Milestone M4 — Bare metal: a Ducky kernel
 
-*Could an operating system be written in Duck?* The foundation already
-points that way: `duckc` emits **freestanding** x86-64 binaries (`_start`,
+*Could an operating system be written in Ducky?* The foundation already
+points that way: `duckyc` emits **freestanding** x86-64 binaries (`_start`,
 raw syscalls, no libc at all) and owns its own backend, so it does not need
 an OS to target a bare machine. What is missing is everything that talks to
 hardware directly:
@@ -132,8 +141,8 @@ hardware directly:
 | B3 | Pointers, address-of and volatile-correct access | MMIO: VGA text at `0xB8000`, APIC, UART |
 | B4 | Structs (builds on N7) | descriptor tables, interrupt frames |
 | B5 | Intrinsics or inline assembly: `in`, `out`, `cli`, `sti`, `hlt` | port I/O, interrupt control |
-| B6 | Linker script + multiboot2 header, a `duckc --freestanding` target flag | GRUB loads the kernel where it must live |
-| B7 | Demo kernel: VGA text “Hello from Duck” booting in QEMU | proves the whole pipeline end to end |
+| B6 | Linker script + multiboot2 header, a `duckyc --freestanding` target flag | GRUB loads the kernel where it must live |
+| B7 | Demo kernel: VGA text “Hello from Ducky” booting in QEMU | proves the whole pipeline end to end |
 | B8 | Interrupt handling: IDT, ISRs, PIT timer, keyboard input | a kernel that reacts to the world |
 
 With B1–B8 the same compiler that builds programs for Linux today could

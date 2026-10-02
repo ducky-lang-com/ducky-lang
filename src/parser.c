@@ -1,4 +1,4 @@
-/* parser.c - recursive descent parser producing the Duck AST. */
+/* parser.c - recursive descent parser producing the Ducky AST. */
 #include "parser.h"
 
 #include <stdio.h>
@@ -646,7 +646,7 @@ static Stmt *parse_stmt(void) {
         const char *new_word = retired_keyword(start->name);
         if (new_word) {
             fatal_at(P.src, start->line, start->col,
-                     "'%s' is not a Duck keyword anymore - use '%s' instead",
+                     "'%s' is not a Ducky keyword anymore - use '%s' instead",
                      start->name, new_word);
         }
     }
@@ -695,6 +695,56 @@ static Func *parse_func(void) {
 
     if (accept(TK_ARROW)) f->ret = parse_type();
     f->body = parse_block();
+    return f;
+}
+
+/* `extern fn name(type: Type, ..., ...) -> Type;` - a declaration of a C
+ * function: no body, linked against the C library at link time. The trailing
+ * `...` marks the C variadic form (printf-style): calls may pass any number
+ * of extra scalar or string arguments. */
+static Func *parse_extern_func(void) {
+    Token *kw = next(); /* extern */
+    expect(TK_FN, "'fn' after 'extern'");
+    Token *name = expect(TK_IDENT, "a function name");
+
+    Func *f = arena_alloc(sizeof(Func));
+    memset(f, 0, sizeof(*f));
+    f->name = name->name;
+    f->line = kw->line;
+    f->col = kw->col;
+    f->src = P.src;
+    f->ret = TY_VOID;
+    f->is_extern = 1;
+
+    expect(TK_LPAREN, "'(' after the function name");
+
+    Vec params = {0};
+    if (!check(TK_RPAREN)) {
+        do {
+            if (accept(TK_ELLIPSIS)) { /* `...` */
+                f->is_variadic = 1;
+                break;
+            }
+            Token *pname = expect(TK_IDENT, "a parameter name");
+            expect(TK_COLON, "':' after the parameter name");
+            Type ptype = parse_type();
+
+            Param *p = arena_alloc(sizeof(Param));
+            p->name = pname->name;
+            p->type = ptype;
+            p->line = pname->line;
+            p->col = pname->col;
+            p->src = P.src;
+            vec_push(&params, p);
+        } while (accept(TK_COMMA));
+    }
+    expect(TK_RPAREN, "')' after the parameter list");
+
+    f->nparams = params.len;
+    f->params = vec_finish(&params, sizeof(Param *));
+
+    if (accept(TK_ARROW)) f->ret = parse_type();
+    expect(TK_SEMI, "';' after the extern function declaration");
     return f;
 }
 
@@ -804,19 +854,23 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
             vec_push(&structs, parse_struct());
             continue;
         }
+        if (check(TK_EXTERN)) {
+            vec_push(&funcs, parse_extern_func());
+            continue;
+        }
         if (!check(TK_FN)) {
             if (check(TK_IDENT)) {
                 const char *new_word = retired_keyword(peek()->name);
                 if (new_word) {
                     fatal_at(src, peek()->line, peek()->col,
-                             "'%s' is not a Duck keyword anymore - use '%s' instead",
+                             "'%s' is not a Ducky keyword anymore - use '%s' instead",
                              peek()->name, new_word);
                 }
             }
             char got[64];
             describe(peek(), got, sizeof(got));
             fatal_at(src, peek()->line, peek()->col,
-                     "expected a top-level declaration ('fn', 'struct', 'const' or 'import'), "
+                     "expected a top-level declaration ('fn', 'struct', 'const', 'import' or 'extern'), "
                      "found %s", got);
         }
         vec_push(&funcs, parse_func());

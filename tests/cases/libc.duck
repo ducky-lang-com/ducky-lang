@@ -1,0 +1,21 @@
+// libc.duck - extern declarations call real C functions (linked with glibc).
+extern fn printf(fmt: string, ...) -> int;
+extern fn abs(n: int) -> int;
+extern fn strlen(s: string) -> int;
+extern fn sqrt(x: float) -> float;
+extern fn srand(seed: int);
+extern fn rand() -> int;
+
+fn main() -> int {
+    printf("abs(-17) = %d\n", abs(-17));
+    printf("len = %d\n", strlen("ducky"));
+    let r = sqrt(2.0);
+    printf("sqrt(2) = %.13f\n", r);
+    printf("%s + %d + %.2f\n", "quack", 7, 0.5);
+    srand(42);
+    printf("rand = %d\n", rand());
+    // Stack and register arguments interleaved: 7 ints (two on the stack)
+    // followed by a float that still fits in xmm0.
+    printf("%d %d %d %d %d %d %d %f\n", 1, 2, 3, 4, 5, 6, 7, 1.5);
+    send 0;
+}

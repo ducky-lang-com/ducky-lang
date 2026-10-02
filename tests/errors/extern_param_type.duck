@@ -1,0 +1,5 @@
+extern fn f(x: [int]) -> int;
+
+fn main() -> int {
+    send f([1, 2]);
+}

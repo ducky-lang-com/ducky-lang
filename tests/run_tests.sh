@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_tests.sh - test suite for the Duck language compiler.
+# run_tests.sh - test suite for the Ducky language compiler.
 #
 #   tests/cases/*.duck    must compile, run and print exactly the contents of
 #                         the matching .expected file (exit status from
@@ -9,7 +9,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DUCKC="$ROOT/duckc"
+DUCKYC="$ROOT/duckyc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -30,8 +30,8 @@ bad() {
     done
 }
 
-if [ ! -x "$DUCKC" ]; then
-    echo "error: $DUCKC not found - run 'make' first" >&2
+if [ ! -x "$DUCKYC" ]; then
+    echo "error: $DUCKYC not found - run 'make' first" >&2
     exit 1
 fi
 
@@ -40,7 +40,7 @@ for src in "$ROOT"/tests/cases/*.duck; do
     name="$(basename "$src" .duck)"
     exe="$TMP/$name"
 
-    if ! "$DUCKC" "$src" -o "$exe" 2>"$TMP/$name.cc.err"; then
+    if ! "$DUCKYC" "$src" -o "$exe" 2>"$TMP/$name.cc.err"; then
         bad "$name" "compilation failed:" "$(cat "$TMP/$name.cc.err")"
         continue
     fi
@@ -75,7 +75,7 @@ echo "error tests"
 for src in "$ROOT"/tests/errors/*.duck; do
     name="$(basename "$src" .duck)"
 
-    if "$DUCKC" "$src" -o "$TMP/$name" 2>"$TMP/$name.err"; then
+    if "$DUCKYC" "$src" -o "$TMP/$name" 2>"$TMP/$name.err"; then
         bad "$name" "compilation succeeded but an error was expected"
         continue
     fi

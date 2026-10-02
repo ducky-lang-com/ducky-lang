@@ -1,0 +1,4 @@
+fn main() -> int {
+    serve(scan_int(42));
+    send 0;
+}

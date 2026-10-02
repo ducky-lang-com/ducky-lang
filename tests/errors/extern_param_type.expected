@@ -1,0 +1,1 @@
+extern function 'f': parameter 1 cannot be '[int]' - use 'int', 'float', 'bool' or 'string'

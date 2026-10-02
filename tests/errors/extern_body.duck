@@ -1,0 +1,7 @@
+extern fn f() -> int {
+    send 1;
+}
+
+fn main() -> int {
+    send 0;
+}

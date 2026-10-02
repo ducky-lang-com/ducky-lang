@@ -1,0 +1,34 @@
+// scan.duck - scan_int/scan_float parse strings C-style; the *_line variants
+// read one line from stdin first.
+fn main() -> int {
+    // scan_int: leading whitespace, optional sign, stop at first non-digit.
+    serve(scan_int("  42abc"));
+    serve(scan_int("-17"));
+    serve(scan_int("+8"));
+    serve(scan_int("junk")); // no digits -> 0
+    serve(scan_int("")); // no digits -> 0
+    serve(scan_int("0x10")); // decimal only -> 0
+    serve(scan_int("9223372036854775807"));
+    serve(scan_int("99999999999999999999")); // clamps to INT64_MAX
+    serve(scan_int("-99999999999999999999")); // clamps to -INT64_MAX
+
+    // scan_float: decimal point, exponent, junk, specials.
+    serve(scan_float("6.25"));
+    serve(scan_float(" -0.25x"));
+    serve(scan_float("1e3"));
+    serve(scan_float("0.0025"));
+    serve(scan_float("1.5e-4"));
+    serve(scan_float(".001"));
+    serve(scan_float("1000"));
+    serve(scan_float("junk")); // no digits -> 0
+    serve(scan_float("1e300"));
+    serve(scan_float("5e-320")); // still a subnormal
+    serve(scan_float("inf"));
+    serve(scan_float("-INF"));
+
+    // stdin: one line each, then EOF reads as an empty line -> 0.
+    serve(scan_int_line());
+    serve(scan_float_line());
+    serve(scan_int_line());
+    send 0;
+}

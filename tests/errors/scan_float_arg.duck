@@ -1,0 +1,4 @@
+fn main() -> int {
+    serve(scan_float(1.5));
+    send 0;
+}

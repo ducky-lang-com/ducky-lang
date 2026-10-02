@@ -1,4 +1,4 @@
-/* lexer.c - hand-written scanner for Duck source files. */
+/* lexer.c - hand-written scanner for Ducky source files. */
 #include "lexer.h"
 
 #include <ctype.h>
@@ -52,11 +52,12 @@ static struct {
     const char *word;
     TokenKind kind;
 } keywords[] = {
-    {"fn", TK_FN},         {"struct", TK_STRUCT}, {"import", TK_IMPORT},
-    {"const", TK_CONST},   {"let", TK_LET},       {"if", TK_IF},
-    {"else", TK_ELSE},     {"while", TK_WHILE},   {"for", TK_FOR},
-    {"in", TK_IN},         {"send", TK_RETURN},   {"break", TK_BREAK},
-    {"continue", TK_CONTINUE}, {"true", TK_TRUE}, {"false", TK_FALSE},
+    {"fn", TK_FN},         {"extern", TK_EXTERN}, {"struct", TK_STRUCT},
+    {"import", TK_IMPORT}, {"const", TK_CONST},   {"let", TK_LET},
+    {"if", TK_IF},         {"else", TK_ELSE},     {"while", TK_WHILE},
+    {"for", TK_FOR},       {"in", TK_IN},         {"send", TK_RETURN},
+    {"break", TK_BREAK},   {"continue", TK_CONTINUE}, {"true", TK_TRUE},
+    {"false", TK_FALSE},
     {"int", TK_KW_INT},    {"float", TK_KW_FLOAT},{"bool", TK_KW_BOOL},
     {"string", TK_KW_STRING},
 };
@@ -358,7 +359,12 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
         case '.':
             if (lx.p < lx.end && *lx.p == '.') {
                 advance(&lx);
-                t = make_token(&lx, TK_DOTDOT, start, line, col);
+                if (lx.p < lx.end && *lx.p == '.') {
+                    advance(&lx);
+                    t = make_token(&lx, TK_ELLIPSIS, start, line, col);
+                } else {
+                    t = make_token(&lx, TK_DOTDOT, start, line, col);
+                }
             } else {
                 t = make_token(&lx, TK_DOT, start, line, col);
             }
@@ -378,6 +384,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_FLOAT:     return "float";
     case TK_STRING:    return "string";
     case TK_FN:        return "fn";
+    case TK_EXTERN:    return "extern";
     case TK_STRUCT:    return "struct";
     case TK_IMPORT:    return "import";
     case TK_CONST:     return "const";
@@ -408,6 +415,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_ARROW:     return "->";
     case TK_DOT:       return ".";
     case TK_DOTDOT:    return "..";
+    case TK_ELLIPSIS:  return "...";
     case TK_PLUS:      return "+";
     case TK_MINUS:     return "-";
     case TK_STAR:      return "*";

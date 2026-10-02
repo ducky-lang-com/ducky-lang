@@ -1,4 +1,4 @@
-/* ast.h - abstract syntax tree for Duck programs. */
+/* ast.h - abstract syntax tree for Ducky programs. */
 #ifndef DUCK_AST_H
 #define DUCK_AST_H
 
@@ -104,7 +104,11 @@ typedef enum {
     BUILTIN_INPUT,
     BUILTIN_INT,   /* int(float) -> int   */
     BUILTIN_FLOAT, /* float(int) -> float */
-    BUILTIN_PUSH   /* push([T], T) -> [T] */
+    BUILTIN_PUSH,  /* push([T], T) -> [T] */
+    BUILTIN_SCAN_INT,      /* scan_int(string) -> int     (like C's atoi)   */
+    BUILTIN_SCAN_FLOAT,    /* scan_float(string) -> float (like C's atof)   */
+    BUILTIN_SCAN_INT_LINE, /* scan_int_line() -> int  (reads stdin)         */
+    BUILTIN_SCAN_FLOAT_LINE /* scan_float_line() -> float (reads stdin)     */
 } Builtin;
 
 typedef struct Func Func;
@@ -281,6 +285,8 @@ struct Func {
     int col;
     const struct SourceFile *src;
     int frame_size; /* bytes of stack for parameters + locals, set by sema */
+    int is_extern;  /* `extern fn ...;` - declared, never defined here */
+    int is_variadic; /* trailing `...` (only valid on extern declarations) */
 };
 
 typedef struct Program {

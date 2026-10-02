@@ -1,8 +1,8 @@
 {
-  "name": "duck-lang",
-  "displayName": "Duck",
-  "description": "Syntax highlighting and language support for the Duck programming language (duck-lang)",
-  "version": "0.1.8",
+  "name": "ducky-lang",
+  "displayName": "Ducky",
+  "description": "Syntax highlighting and language support for the Ducky programming language (ducky-lang)",
+  "version": "0.1.9",
   "publisher": "didacg",
   "icon": "assets/icon.png",
   "engines": {
@@ -13,18 +13,19 @@
   ],
   "keywords": [
     "duck",
-    "duck-lang",
-    "duckc"
+    "ducky",
+    "ducky-lang",
+    "duckyc"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/didacg/duck-lang.git"
+    "url": "https://github.com/ducky-lang-com/ducky-lang.git"
   },
   "contributes": {
     "languages": [
       {
         "id": "duck",
-        "aliases": ["Duck", "duck-lang"],
+        "aliases": ["Ducky", "ducky-lang"],
         "extensions": [".duck"],
         "configuration": "./language-configuration.json",
         "icon": {

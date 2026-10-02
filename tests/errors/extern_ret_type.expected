@@ -1,0 +1,1 @@
+extern function 'f': the return type cannot be '[int]'

@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh - installer for the Duck language compiler (duckc).
+# install.sh - installer for the Ducky language compiler (duckyc).
 #
 # Usage:
 #   sh install.sh                build and install compiler + editor extension
@@ -10,17 +10,17 @@
 #   sh install.sh --help         show this help
 #
 # One-liner (clones the repository, builds and installs):
-#   curl -fsSL https://raw.githubusercontent.com/didacg/duck-lang/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ducky-lang-com/ducky-lang/main/install.sh | sh
 set -eu
 
-REPO_URL="https://github.com/didacg/duck-lang.git"
-BIN_NAME="duckc"
+REPO_URL="https://github.com/ducky-lang-com/ducky-lang.git"
+BIN_NAME="duckyc"
 DEFAULT_PREFIX="/usr/local"
 USER_PREFIX="${HOME}/.local"
 
 usage() {
     cat <<'EOF'
-install.sh - installs the Duck language compiler (duckc)
+install.sh - installs the Ducky language compiler (duckyc)
 
 Options:
   --prefix DIR   install into DIR/bin (default: /usr/local)
@@ -29,10 +29,10 @@ Options:
   --uninstall    remove the compiler and the editor extension
   -h, --help     show this help
 
-Along with the compiler, the script installs the Duck editor extension
+Along with the compiler, the script installs the Ducky editor extension
 (syntax highlighting for .duck files) into every VS Code-compatible editor
 found in your home directory. Use --no-editor to skip it. It also installs
-update.sh as 'duck-update', the command used to update Duck later.
+update.sh as 'ducky-update', the command used to update Ducky later.
 
 Without a checkout of the repository, the script clones it into a temporary
 directory, builds it and installs the resulting binary.
@@ -100,11 +100,18 @@ if [ "$UNINSTALL" -eq 1 ]; then
     }
     if [ -n "$PREFIX" ]; then
         remove_file "$PREFIX/bin/$BIN_NAME"
+        remove_file "$PREFIX/bin/ducky-update"
+        remove_tree "$PREFIX/share/ducky-lang"
+        # names used before the rename (Duck v0.6 and earlier)
+        remove_file "$PREFIX/bin/duckc"
         remove_file "$PREFIX/bin/duck-update"
         remove_tree "$PREFIX/share/duck-lang"
     else
         for dir in "$DEFAULT_PREFIX" "$USER_PREFIX"; do
             remove_file "$dir/bin/$BIN_NAME"
+            remove_file "$dir/bin/ducky-update"
+            remove_tree "$dir/share/ducky-lang"
+            remove_file "$dir/bin/duckc"
             remove_file "$dir/bin/duck-update"
             remove_tree "$dir/share/duck-lang"
         done
@@ -119,7 +126,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
             "$EXT_HOME/.vscode-server/extensions" \
             "$EXT_HOME/.vscode-server-insiders/extensions"
         do
-            for ext in "$ed"/duck-lang-*; do
+            for ext in "$ed"/duck-lang-* "$ed"/ducky-lang-*; do
                 if [ -d "$ext" ]; then
                     rm -rf "$ext"
                     echo "removed $ext"
@@ -156,8 +163,8 @@ else
     WORK="$(mktemp -d)"
     trap 'rm -rf "$WORK"' EXIT
     echo "==> cloning $REPO_URL"
-    git clone --quiet --depth 1 "$REPO_URL" "$WORK/duck-lang"
-    SOURCE_DIR="$WORK/duck-lang"
+    git clone --quiet --depth 1 "$REPO_URL" "$WORK/ducky-lang"
+    SOURCE_DIR="$WORK/ducky-lang"
 fi
 
 # ------------------------------------------------------------------- build
@@ -188,25 +195,37 @@ else
     chmod 0755 "$PREFIX/bin/$BIN_NAME"
 fi
 
-# Ship the updater as a command so Duck can be updated later from anywhere.
+# Ship the updater as a command so Ducky can be updated later from anywhere.
 if [ -f "$SOURCE_DIR/update.sh" ]; then
     if command -v install >/dev/null 2>&1; then
-        install -m 0755 "$SOURCE_DIR/update.sh" "$PREFIX/bin/duck-update"
+        install -m 0755 "$SOURCE_DIR/update.sh" "$PREFIX/bin/ducky-update"
     else
-        cp "$SOURCE_DIR/update.sh" "$PREFIX/bin/duck-update"
-        chmod 0755 "$PREFIX/bin/duck-update"
+        cp "$SOURCE_DIR/update.sh" "$PREFIX/bin/ducky-update"
+        chmod 0755 "$PREFIX/bin/ducky-update"
     fi
-    echo "installed $PREFIX/bin/duck-update (run 'duck-update' to update Duck)"
+    echo "installed $PREFIX/bin/ducky-update (run 'ducky-update' to update Ducky)"
 fi
 
-# Stamp the commit that was built so 'duck-update --check' can compare it
+# Remove files installed under the pre-rename names (Duck v0.6 and earlier)
+# so an upgrade does not leave two compilers on PATH.
+for legacy in "$PREFIX/bin/duckc" "$PREFIX/bin/duck-update"; do
+    if [ -e "$legacy" ]; then
+        rm -f "$legacy"
+        echo "removed $legacy (renamed in the Ducky rename)"
+    fi
+done
+if [ -d "$PREFIX/share/duck-lang" ]; then
+    rm -rf "$PREFIX/share/duck-lang"
+fi
+
+# Stamp the commit that was built so 'ducky-update --check' can compare it
 # with the tip of origin/main.
 DUCK_COMMIT="unknown"
 if [ -d "$SOURCE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
     DUCK_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 fi
-mkdir -p "$PREFIX/share/duck-lang"
-echo "$DUCK_COMMIT" > "$PREFIX/share/duck-lang/commit"
+mkdir -p "$PREFIX/share/ducky-lang"
+echo "$DUCK_COMMIT" > "$PREFIX/share/ducky-lang/commit"
 
 echo
 echo "==> $BIN_NAME installed:"
@@ -238,12 +257,12 @@ cat <<EOF
 Quick start:
   cat > hello.duck <<'DUCK'
   fn main() -> int {
-      serve("Hello, Duck!");
+      serve("Hello, Ducky!");
       return 0;
   }
   DUCK
-  duckc hello.duck -o hello && ./hello
+  duckyc hello.duck -o hello && ./hello
 
-Documentation: https://github.com/didacg/duck-lang
+Documentation: https://github.com/ducky-lang-com/ducky-lang
 Uninstall with: sh install.sh --uninstall
 EOF
