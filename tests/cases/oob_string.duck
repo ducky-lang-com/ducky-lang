@@ -1,0 +1,6 @@
+// oob_string.duck - string indexes are checked too.
+fn main() -> int {
+    let s = "abc";
+    serve(s[5]);
+    send 0;
+}

@@ -1,0 +1,35 @@
+// floats.duck - f64 arithmetic, comparisons, conversions and formatting.
+fn main() -> int {
+    serve(1.5);              // 1.5
+    serve(-2.5);             // -2.5
+    serve(0.1 + 0.2);        // 0.3 (15 significant digits, rounded)
+    serve(1.0 / 3.0);        // 0.333333333333333
+    serve(2.675);            // 2.675 (rounding, not truncation)
+    serve(100.0);            // 100
+    serve(1.0 / 8.0);        // 0.125
+    serve(123.456);          // 123.456
+    serve(0.1);              // 0.1
+    serve(1.5e-7);           // 0.00000015
+    serve(1e20);             // 1e+20
+    serve(1e-20);            // 1e-20
+    serve(1.0 / 0.0);        // inf
+    serve(-1.0 / 0.0);       // -inf
+    serve(0.0 / 0.0);        // nan
+    serve(float(42));        // 42
+    serve(int(2.99));        // 2
+    serve(int(-2.99));       // -2
+    serve(1.5 < 2.0);        // true
+    serve(1.5 <= 1.5);       // true
+    serve(2.0 > 3.0);        // false
+    serve(-1.0 < 1.0);       // true
+    serve(0.1 + 0.2 == 0.3); // false: IEEE-754 keeps the tiny error
+    serve(0.0 / 0.0 == 0.0 / 0.0); // false
+    serve(0.0 / 0.0 != 0.0 / 0.0); // true
+    let x: float = 10.0;
+    serve(x * 2.0);          // 20
+    serve(x / 4.0);          // 2.5
+    serve(str(x - 9.5));     // 0.5
+    serve(str(1e20));        // 1e+20
+    serve("v=" + str(x));    // v=10
+    send 0;
+}

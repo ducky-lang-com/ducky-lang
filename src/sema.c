@@ -39,6 +39,13 @@ static int starts_with(const char *s, const char *prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
+static int is_builtin_name(const char *name) {
+    return strcmp(name, "serve") == 0 || strcmp(name, "len") == 0 ||
+           strcmp(name, "str") == 0 || strcmp(name, "input_line") == 0 ||
+           strcmp(name, "int") == 0 || strcmp(name, "float") == 0 ||
+           strcmp(name, "push") == 0;
+}
+
 static Func *find_func(Program *prog, const char *name) {
     for (int i = 0; i < prog->nfuncs; i++) {
         if (strcmp(prog->funcs[i]->name, name) == 0) return prog->funcs[i];
@@ -46,9 +53,11 @@ static Func *find_func(Program *prog, const char *name) {
     return NULL;
 }
 
-static int is_builtin_name(const char *name) {
-    return strcmp(name, "serve") == 0 || strcmp(name, "len") == 0 ||
-           strcmp(name, "str") == 0 || strcmp(name, "input_line") == 0;
+static Const *find_const(Program *prog, const char *name) {
+    for (int i = 0; i < prog->nconsts; i++) {
+        if (strcmp(prog->consts[i]->name, name) == 0) return prog->consts[i];
+    }
+    return NULL;
 }
 
 static void push_scope(void) {
@@ -133,6 +142,9 @@ static Type check_expr(Expr *e) {
     case EX_INT:
         return e->type = TY_INT;
 
+    case EX_FLOAT:
+        return e->type = TY_FLOAT;
+
     case EX_BOOL:
         return e->type = TY_BOOL;
 
@@ -141,19 +153,40 @@ static Type check_expr(Expr *e) {
 
     case EX_VAR: {
         Var *v = find_var(e->var.name);
-        if (!v) {
-            err(e->line, e->col, "undefined variable '%s'", e->var.name);
+        if (v) {
+            e->var.offset = v->offset;
+            return e->type = v->type;
         }
-        e->var.offset = v->offset;
-        return e->type = v->type;
+        Const *c = find_const(g_prog, e->var.name);
+        if (c) {
+            /* Replace the reference with the literal value in place, so
+             * code generation needs no special case for constants. */
+            Expr *lit = c->value;
+            switch (lit->kind) {
+            case EX_INT:   e->ival = lit->ival; break;
+            case EX_FLOAT: e->dval = lit->dval; break;
+            case EX_BOOL:  e->bval = lit->bval; break;
+            default:       e->sval = lit->sval; break;
+            }
+            e->kind = lit->kind;
+            return e->type = lit->type;
+        }
+        err(e->line, e->col, "undefined variable '%s'", e->var.name);
+        return e->type = TY_VOID; /* unreachable */
     }
 
     case EX_UNARY: {
         Type t = check_expr(e->unary.operand);
-        if (e->unary.op == UOP_NEG || e->unary.op == UOP_BITNOT) {
+        if (e->unary.op == UOP_NEG) {
+            if (t != TY_INT && t != TY_FLOAT) {
+                err(e->line, e->col, "unary '-' requires 'int' or 'float', found '%s'",
+                    type_name(t));
+            }
+            return e->type = t;
+        }
+        if (e->unary.op == UOP_BITNOT) {
             if (t != TY_INT) {
-                err(e->line, e->col, "unary '%s' requires 'int', found '%s'",
-                    unary_op_name(e->unary.op), type_name(t));
+                err(e->line, e->col, "unary '~' requires 'int', found '%s'", type_name(t));
             }
             return e->type = TY_INT;
         }
@@ -178,8 +211,16 @@ static Type check_expr(Expr *e) {
             return e->type = TY_BOOL;
 
         case BOP_ADD:
-            /* '+' adds two ints or concatenates two strings; nothing is
-             * converted implicitly. */
+            /* '+' adds two floats, adds two ints or concatenates two
+             * strings; nothing is converted implicitly. */
+            if (l == TY_FLOAT || r == TY_FLOAT) {
+                if (l != TY_FLOAT || r != TY_FLOAT) {
+                    err(e->line, e->col,
+                        "operator '+' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
+                        type_name(l), type_name(r));
+                }
+                return e->type = TY_FLOAT;
+            }
             if (l == TY_STRING || r == TY_STRING) {
                 if (l != TY_STRING || r != TY_STRING) {
                     err(e->line, e->col,
@@ -197,6 +238,20 @@ static Type check_expr(Expr *e) {
         case BOP_SUB:
         case BOP_MUL:
         case BOP_DIV:
+            if (l == TY_FLOAT || r == TY_FLOAT) {
+                if (l != TY_FLOAT || r != TY_FLOAT) {
+                    err(e->line, e->col,
+                        "operator '%s' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
+                        binary_op_name(op), type_name(l), type_name(r));
+                }
+                return e->type = TY_FLOAT;
+            }
+            if (l != TY_INT || r != TY_INT) {
+                err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
+                    binary_op_name(op), type_name(l), type_name(r));
+            }
+            return e->type = TY_INT;
+
         case BOP_MOD:
         case BOP_BITAND:
         case BOP_BITOR:
@@ -213,6 +268,14 @@ static Type check_expr(Expr *e) {
         case BOP_LE:
         case BOP_GT:
         case BOP_GE:
+            if (l == TY_FLOAT || r == TY_FLOAT) {
+                if (l != TY_FLOAT || r != TY_FLOAT) {
+                    err(e->line, e->col,
+                        "operator '%s' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
+                        binary_op_name(op), type_name(l), type_name(r));
+                }
+                return e->type = TY_BOOL;
+            }
             if (l != TY_INT || r != TY_INT) {
                 err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
                     binary_op_name(op), type_name(l), type_name(r));
@@ -228,8 +291,50 @@ static Type check_expr(Expr *e) {
             if (l == TY_VOID) {
                 err(e->line, e->col, "values of type 'void' cannot be compared");
             }
+            if (type_is_array(l)) {
+                err(e->line, e->col,
+                    "arrays cannot be compared with '%s' - compare elements instead",
+                    binary_op_name(op));
+            }
             return e->type = TY_BOOL;
         }
+        return e->type = TY_VOID; /* unreachable */
+    }
+
+    case EX_ARRAY: {
+        if (e->array.nelems == 0) {
+            err(e->line, e->col,
+                "cannot infer the type of an empty array literal - declare the type, as in 'let xs: [int] = []'");
+        }
+        Type et = check_expr(e->array.elems[0]);
+        for (int i = 1; i < e->array.nelems; i++) {
+            Type t = check_expr(e->array.elems[i]);
+            if (t != et) {
+                err(e->array.elems[i]->line, e->array.elems[i]->col,
+                    "array elements must all have the same type: found '%s' and '%s'",
+                    type_name(et), type_name(t));
+            }
+        }
+        if (et == TY_VOID) {
+            err(e->line, e->col, "cannot store a value of type 'void' in an array");
+        }
+        if (type_is_array(et)) {
+            err(e->line, e->col, "arrays of '%s' are not supported yet", type_name(et));
+        }
+        e->array.slot = alloc_slot();
+        return e->type = type_array_of(et);
+    }
+
+    case EX_INDEX: {
+        Type ot = check_expr(e->index.obj);
+        Type it = check_expr(e->index.idx);
+        if (it != TY_INT) {
+            err(e->index.idx->line, e->index.idx->col,
+                "an index must be an 'int', found '%s'", type_name(it));
+        }
+        if (type_is_array(ot)) return e->type = type_elem(ot);
+        if (ot == TY_STRING) return e->type = TY_STRING;
+        err(e->line, e->col, "cannot index a value of type '%s'", type_name(ot));
         return e->type = TY_VOID; /* unreachable */
     }
 
@@ -242,7 +347,10 @@ static Type check_expr(Expr *e) {
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t == TY_VOID) err(e->line, e->col, "cannot pass a value of type 'void' to serve()");
+            if (t == TY_VOID || type_is_array(t)) {
+                err(e->line, e->col, "cannot pass a value of type '%s' to serve()",
+                    type_name(t));
+            }
             e->call.builtin = BUILTIN_SERVE;
             return e->type = TY_VOID;
         }
@@ -253,9 +361,9 @@ static Type check_expr(Expr *e) {
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t != TY_STRING) {
+            if (t != TY_STRING && !type_is_array(t)) {
                 err(e->call.args[0]->line, e->call.args[0]->col,
-                    "len() expects a 'string', found '%s'", type_name(t));
+                    "len() expects a 'string' or an array, found '%s'", type_name(t));
             }
             e->call.builtin = BUILTIN_LEN;
             return e->type = TY_INT;
@@ -267,9 +375,10 @@ static Type check_expr(Expr *e) {
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t != TY_INT && t != TY_BOOL) {
+            if (t != TY_INT && t != TY_BOOL && t != TY_FLOAT) {
                 err(e->call.args[0]->line, e->call.args[0]->col,
-                    "str() expects an 'int' or a 'bool', found '%s'", type_name(t));
+                    "str() expects an 'int', a 'bool' or a 'float', found '%s'",
+                    type_name(t));
             }
             e->call.builtin = BUILTIN_STR;
             return e->type = TY_STRING;
@@ -282,6 +391,55 @@ static Type check_expr(Expr *e) {
             }
             e->call.builtin = BUILTIN_INPUT;
             return e->type = TY_STRING;
+        }
+
+        if (strcmp(name, "int") == 0) {
+            if (e->call.nargs != 1) {
+                err(e->line, e->col, "int() expects exactly 1 argument, found %d",
+                    e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_FLOAT) {
+                err(e->call.args[0]->line, e->call.args[0]->col,
+                    "int() expects a 'float', found '%s'", type_name(t));
+            }
+            e->call.builtin = BUILTIN_INT;
+            return e->type = TY_INT;
+        }
+
+        if (strcmp(name, "float") == 0) {
+            if (e->call.nargs != 1) {
+                err(e->line, e->col, "float() expects exactly 1 argument, found %d",
+                    e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_INT) {
+                err(e->call.args[0]->line, e->call.args[0]->col,
+                    "float() expects an 'int', found '%s'", type_name(t));
+            }
+            e->call.builtin = BUILTIN_FLOAT;
+            return e->type = TY_FLOAT;
+        }
+
+        if (strcmp(name, "push") == 0) {
+            if (e->call.nargs != 2) {
+                err(e->line, e->col, "push() expects exactly 2 arguments, found %d",
+                    e->call.nargs);
+            }
+            Type at = check_expr(e->call.args[0]);
+            if (!type_is_array(at)) {
+                err(e->call.args[0]->line, e->call.args[0]->col,
+                    "push() expects an array as its first argument, found '%s'",
+                    type_name(at));
+            }
+            Type vt = check_expr(e->call.args[1]);
+            if (vt != type_elem(at)) {
+                err(e->call.args[1]->line, e->call.args[1]->col,
+                    "push() expects a '%s' value to append, found '%s'",
+                    type_name(type_elem(at)), type_name(vt));
+            }
+            e->call.builtin = BUILTIN_PUSH;
+            return e->type = at;
         }
 
         /* Resolved against the global function table collected in analyze(). */
@@ -327,15 +485,27 @@ static void check_stmt(Stmt *s) {
         break;
 
     case ST_LET: {
-        Type t = check_expr(s->let.init);
-        if (t == TY_VOID) {
-            err(s->line, s->col, "cannot initialize '%s' with a value of type 'void'",
-                s->let.name);
-        }
-        if (s->let.has_ann && s->let.ann != t) {
-            err(s->line, s->col,
-                "type mismatch: '%s' is declared as '%s' but the initializer has type '%s'",
-                s->let.name, type_name(s->let.ann), type_name(t));
+        Type t;
+        if (s->let.init->kind == EX_ARRAY && s->let.init->array.nelems == 0) {
+            /* An empty literal only works with an explicit annotation. */
+            if (!s->let.has_ann || !type_is_array(s->let.ann)) {
+                err(s->line, s->col,
+                    "cannot infer the type of an empty array literal - declare the type, as in 'let xs: [int] = []'");
+            }
+            t = s->let.ann;
+            s->let.init->type = t;
+            s->let.init->array.slot = alloc_slot();
+        } else {
+            t = check_expr(s->let.init);
+            if (t == TY_VOID) {
+                err(s->line, s->col, "cannot initialize '%s' with a value of type 'void'",
+                    s->let.name);
+            }
+            if (s->let.has_ann && s->let.ann != t) {
+                err(s->line, s->col,
+                    "type mismatch: '%s' is declared as '%s' but the initializer has type '%s'",
+                    s->let.name, type_name(s->let.ann), type_name(t));
+            }
         }
         Var *v = declare_var(s->let.name, t, s->line, s->col);
         s->let.offset = v->offset;
@@ -343,6 +513,36 @@ static void check_stmt(Stmt *s) {
     }
 
     case ST_ASSIGN: {
+        if (s->assign.target) {
+            /* `xs[i] = v;` - the target must be an element of an array. */
+            Expr *tg = s->assign.target;
+            Type ot = check_expr(tg->index.obj);
+            Type it = check_expr(tg->index.idx);
+            if (it != TY_INT) {
+                err(tg->index.idx->line, tg->index.idx->col,
+                    "an index must be an 'int', found '%s'", type_name(it));
+            }
+            if (!type_is_array(ot)) {
+                if (ot == TY_STRING) {
+                    err(tg->line, tg->col,
+                        "a 'string' cannot be modified through an index - strings are immutable");
+                }
+                err(tg->line, tg->col, "cannot assign to an element of type '%s'",
+                    type_name(ot));
+            }
+            Type t = check_expr(s->assign.value);
+            if (t == TY_VOID) {
+                err(s->line, s->col, "cannot assign a value of type 'void'");
+            }
+            if (t != type_elem(ot)) {
+                err(s->line, s->col,
+                    "type mismatch: cannot assign '%s' to an element of type '%s'",
+                    type_name(t), type_name(type_elem(ot)));
+            }
+            tg->type = type_elem(ot);
+            break;
+        }
+
         Var *v = find_var(s->assign.name);
         if (!v) {
             err(s->line, s->col, "undefined variable '%s'", s->assign.name);
@@ -476,6 +676,34 @@ void analyze(const SourceFile *src, Program *prog) {
     g_src = src;
     g_prog = prog;
 
+    /* Pass 0: validate the top-level constants and give each literal its
+     * type once, so references can be substituted with a plain copy. */
+    for (int i = 0; i < prog->nconsts; i++) {
+        Const *c = prog->consts[i];
+
+        if (c->name[0] == '_' || starts_with(c->name, "duck_")) {
+            err(c->line, c->col, "constant name '%s' is reserved", c->name);
+        }
+        if (is_builtin_name(c->name)) {
+            err(c->line, c->col, "'%s' is a builtin function and cannot be redefined",
+                c->name);
+        }
+        for (int j = 0; j < i; j++) {
+            if (strcmp(prog->consts[j]->name, c->name) == 0) {
+                err(c->line, c->col, "duplicate constant '%s'", c->name);
+            }
+        }
+        if (find_func(prog, c->name)) {
+            err(c->line, c->col, "'%s' is already declared as a function", c->name);
+        }
+        switch (c->value->kind) {
+        case EX_INT:   c->value->type = TY_INT; break;
+        case EX_FLOAT: c->value->type = TY_FLOAT; break;
+        case EX_BOOL:  c->value->type = TY_BOOL; break;
+        default:       c->value->type = TY_STRING; break;
+        }
+    }
+
     /* Pass 1: collect every function signature so that call order does not
      * matter (mutual recursion works). */
     for (int i = 0; i < prog->nfuncs; i++) {
@@ -486,6 +714,9 @@ void analyze(const SourceFile *src, Program *prog) {
         }
         if (is_builtin_name(f->name)) {
             err(f->line, f->col, "'%s' is a builtin function and cannot be redefined", f->name);
+        }
+        if (find_const(prog, f->name)) {
+            err(f->line, f->col, "'%s' is already declared as a constant", f->name);
         }
         for (int j = 0; j < i; j++) {
             if (strcmp(prog->funcs[j]->name, f->name) == 0) {

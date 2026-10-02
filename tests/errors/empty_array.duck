@@ -1,0 +1,4 @@
+fn main() -> int {
+    let xs = [];
+    send 0;
+}

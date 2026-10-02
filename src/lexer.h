@@ -8,10 +8,12 @@ typedef enum {
     TK_EOF,
     TK_IDENT,
     TK_INT,
+    TK_FLOAT,
     TK_STRING,
 
     /* keywords */
     TK_FN,
+    TK_CONST,
     TK_LET,
     TK_IF,
     TK_ELSE,
@@ -24,12 +26,15 @@ typedef enum {
     TK_TRUE,
     TK_FALSE,
     TK_KW_INT,
+    TK_KW_FLOAT,
     TK_KW_BOOL,
     TK_KW_STRING,
 
     /* punctuation */
     TK_LPAREN,
     TK_RPAREN,
+    TK_LBRACKET,
+    TK_RBRACKET,
     TK_LBRACE,
     TK_RBRACE,
     TK_COMMA,
@@ -69,6 +74,7 @@ typedef struct Token {
     const char *text; /* raw lexeme, not NUL-terminated */
     int len;          /* length of the raw lexeme */
     long ival;        /* TK_INT: decoded literal */
+    double dval;      /* TK_FLOAT: decoded literal */
     char *sval;       /* TK_STRING: decoded, NUL-terminated */
     char *name;       /* TK_IDENT: interned, NUL-terminated */
 } Token;

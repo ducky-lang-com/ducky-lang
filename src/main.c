@@ -134,6 +134,7 @@ int main(int argc, char **argv) {
             Token *t = &toks[i];
             printf("%4d:%-3d %-12s", t->line, t->col, token_kind_name(t->kind));
             if (t->kind == TK_INT) printf(" %ld", t->ival);
+            else if (t->kind == TK_FLOAT) printf(" %g", t->dval);
             else if (t->kind == TK_STRING) printf(" \"%s\"", t->sval);
             else if (t->kind == TK_IDENT) printf(" %s", t->name);
             else if (t->kind != TK_EOF) printf(" %.*s", t->len, t->text);

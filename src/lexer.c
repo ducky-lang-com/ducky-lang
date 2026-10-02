@@ -52,12 +52,12 @@ static struct {
     const char *word;
     TokenKind kind;
 } keywords[] = {
-    {"fn", TK_FN},         {"let", TK_LET},       {"if", TK_IF},
-    {"else", TK_ELSE},     {"while", TK_WHILE},   {"for", TK_FOR},
-    {"in", TK_IN},         {"send", TK_RETURN},   {"break", TK_BREAK},
-    {"continue", TK_CONTINUE},
+    {"fn", TK_FN},         {"const", TK_CONST},   {"let", TK_LET},
+    {"if", TK_IF},         {"else", TK_ELSE},     {"while", TK_WHILE},
+    {"for", TK_FOR},       {"in", TK_IN},         {"send", TK_RETURN},
+    {"break", TK_BREAK},   {"continue", TK_CONTINUE},
     {"true", TK_TRUE},     {"false", TK_FALSE},   {"int", TK_KW_INT},
-    {"bool", TK_KW_BOOL},  {"string", TK_KW_STRING},
+    {"float", TK_KW_FLOAT},{"bool", TK_KW_BOOL},  {"string", TK_KW_STRING},
 };
 
 static void skip_trivia(Lexer *lx) {
@@ -130,6 +130,41 @@ static void scan_number(Lexer *lx, const char *start, int line, int col) {
         }
         value = value * base + digit;
         advance(lx);
+    }
+
+    if (base == 10) {
+        /* Fraction: a '.' that is not the '..' range operator. */
+        int is_float = 0;
+        if (lx->p < lx->end && *lx->p == '.' && lx->p + 1 < lx->end && lx->p[1] != '.') {
+            is_float = 1;
+            advance(lx); /* '.' */
+            while (lx->p < lx->end && isdigit((unsigned char)*lx->p)) advance(lx);
+        }
+        /* Exponent: e|E followed by digits, optionally signed. */
+        if (lx->p < lx->end && (*lx->p == 'e' || *lx->p == 'E')) {
+            const char *q = lx->p + 1;
+            if (q < lx->end && (*q == '+' || *q == '-')) q++;
+            if (q < lx->end && isdigit((unsigned char)*q)) {
+                is_float = 1;
+                advance(lx); /* e/E */
+                if (*lx->p == '+' || *lx->p == '-') advance(lx);
+                while (lx->p < lx->end && isdigit((unsigned char)*lx->p)) advance(lx);
+            }
+        }
+
+        if (is_float) {
+            char buf[80];
+            int len = (int)(lx->p - start);
+            if (len >= (int)sizeof(buf)) {
+                fatal_at(lx->f, line, col, "float literal is too long");
+            }
+            memcpy(buf, start, (size_t)len);
+            buf[len] = '\0';
+            Token t = make_token(lx, TK_FLOAT, start, line, col);
+            t.dval = strtod(buf, NULL);
+            push_token(lx, t);
+            return;
+        }
     }
 
     if (lx->p < lx->end && (isalpha((unsigned char)*lx->p) || *lx->p == '_')) {
@@ -240,6 +275,8 @@ void lex(const SourceFile *src, Token **out_toks, int *out_count) {
         switch (c) {
         case '(': t = make_token(&lx, TK_LPAREN, start, line, col); break;
         case ')': t = make_token(&lx, TK_RPAREN, start, line, col); break;
+        case '[': t = make_token(&lx, TK_LBRACKET, start, line, col); break;
+        case ']': t = make_token(&lx, TK_RBRACKET, start, line, col); break;
         case '{': t = make_token(&lx, TK_LBRACE, start, line, col); break;
         case '}': t = make_token(&lx, TK_RBRACE, start, line, col); break;
         case ',': t = make_token(&lx, TK_COMMA, start, line, col); break;
@@ -337,8 +374,10 @@ const char *token_kind_name(TokenKind k) {
     case TK_EOF:       return "EOF";
     case TK_IDENT:     return "identifier";
     case TK_INT:       return "integer";
+    case TK_FLOAT:     return "float";
     case TK_STRING:    return "string";
     case TK_FN:        return "fn";
+    case TK_CONST:     return "const";
     case TK_LET:       return "let";
     case TK_IF:        return "if";
     case TK_ELSE:      return "else";
@@ -351,10 +390,13 @@ const char *token_kind_name(TokenKind k) {
     case TK_TRUE:      return "true";
     case TK_FALSE:     return "false";
     case TK_KW_INT:    return "int";
+    case TK_KW_FLOAT:  return "float";
     case TK_KW_BOOL:   return "bool";
     case TK_KW_STRING: return "string";
     case TK_LPAREN:    return "(";
     case TK_RPAREN:    return ")";
+    case TK_LBRACKET:  return "[";
+    case TK_RBRACKET:  return "]";
     case TK_LBRACE:    return "{";
     case TK_RBRACE:    return "}";
     case TK_COMMA:     return ",";

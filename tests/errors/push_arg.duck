@@ -1,0 +1,4 @@
+fn main() -> int {
+    serve(push(1, 2));
+    send 0;
+}

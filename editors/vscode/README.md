@@ -5,11 +5,13 @@
 Syntax highlighting and language support for the **Duck** programming
 language (`.duck` files).
 
-* syntax highlighting: comments, strings and escapes, decimal/hex numbers,
-  keywords (`fn`, `let`, `if`, `else`, `while`, `for`, `in`, `send`, `break`,
-  `continue`), types (`int`, `bool`, `string`), `true`/`false`, function
-  definitions and calls, the builtins (`serve`, `len`, `str`, `input_line`),
-  operators (including the bitwise `& | ^ ~ << >>` and the range `..`);
+* syntax highlighting: comments, strings and escapes, decimal/hex/float
+  numbers (`1.5`, `1e-4` — the `..` range stays two integers), keywords
+  (`fn`, `const`, `let`, `if`, `else`, `while`, `for`, `in`, `send`, `break`,
+  `continue`), types (`int`, `float`, `bool`, `string`, `[int]` and friends),
+  `true`/`false`, `const` names, function definitions and calls, the builtins
+  (`serve`, `len`, `str`, `input_line`, `push`), operators (including the
+  bitwise `& | ^ ~ << >>` and the range `..`);
 * **file icon**: `.duck` files show the amber D in the explorer and tabs
   (declared as the language icon, so it works with your current file icon
   theme);
@@ -50,8 +52,8 @@ sh editors/vscode/install.sh --uninstall
 
 ## Manual install
 
-Copy this folder to `<extensions-dir>/duck-lang-0.1.4`, e.g.
+Copy this folder to `<extensions-dir>/duck-lang-0.1.5`, e.g.
 
 ```sh
-cp -r editors/vscode ~/.vscode-oss/extensions/duck-lang-0.1.4
+cp -r editors/vscode ~/.vscode-oss/extensions/duck-lang-0.1.5
 ```

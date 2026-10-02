@@ -32,35 +32,45 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
-v0.3.0 — the English keywords (`fn`, `let`, `if`, `else`) are canonical again,
-with `send` (return) and `serve` (output) kept from the Duck-native round, plus
-the M1 language features: `for i in a .. b` ranges with `break`/`continue`,
-bitwise operators (`& | ^ ~ << >>`), string concatenation with `+`, and the
-`len` / `str` / `input_line` builtins. The Duck-era words `wing`, `nest`,
-`when`, `otherwise` (and the older `return`, `print`) are ordinary identifiers
-now and are rejected with a hint when used as syntax. See
-[ROADMAP.md](ROADMAP.md) for the requirements this release covers and what
+v0.4.0 — adds **floats (`float`, IEEE-754 binary64)**, **arrays** (`[int]`
+literals, bounds-checked `xs[i]` reads and writes, `len()`, `push()`),
+**string indexing** (`s[i]` → a one-byte string) and top-level **`const`**
+declarations, plus the `float(x)` / `int(x)` conversions. On top of v0.3.0's
+English keywords (`fn`, `let`, `if`, `else`, `send`, `serve`); the Duck-era
+words `wing`, `nest`, `when`, `otherwise` (and the older `return`, `print`)
+are ordinary identifiers now and are rejected with a hint when used as syntax.
+See [ROADMAP.md](ROADMAP.md) for the requirements this release covers and what
 comes next.
 
 ## Features
 
-* **Static typing** with three types: `int` (64-bit), `bool`, `string`.
-  No implicit conversions; every mismatch is a compile error with a caret
-  diagnostic.
+* **Static typing** with five types: `int` (64-bit), `float` (f64), `bool`,
+  `string` and fixed-length arrays (`[int]`, `[float]`, `[bool]`,
+  `[string]`). No implicit conversions; every mismatch is a compile error with
+  a caret diagnostic. `float(x)` / `int(x)` convert explicitly.
 * **Functions and variables** with `fn` / `let` (type inference or explicit
-  annotation), `send` for returns, `serve` for output.
+  annotation), `send` for returns, `serve` for output, and top-level `const`
+  declarations (`const LIMIT = 10;` — literals only, order does not matter).
 * **Control flow**: `if` / `else if` / `else`, `while`, `for i in a .. b`
   ranges, `break` and `continue`, short-circuit `&&` / `||`.
-* **Operators** with C precedence: arithmetic, comparisons, logic, and bitwise
-  `& | ^ ~ << >>` (arithmetic `>>`), plus string concatenation with `+`.
-* **Strings**: literals with escapes, value equality (`==` compares contents),
-  `len()`, `str()` for numbers and booleans, `input_line()` for stdin.
+* **Operators** with C precedence: arithmetic on `int` and `float`,
+  comparisons, logic, and bitwise `& | ^ ~ << >>` (arithmetic `>>`), plus
+  string concatenation with `+`.
+* **Arrays**: literals (`[1, 2, 3]`), bounds-checked indexing and element
+  assignment (`xs[0] = 42`), `len()`, `push()` (copy-on-append builds arrays
+  of unknown length), reference semantics between variables.
+* **Strings**: literals with escapes, value equality (`==` compares
+  contents), `len()`, indexing `s[i]` (returns a one-byte string),
+  `str()` for numbers and booleans, `input_line()` for stdin.
+* **Float formatting**: 15 rounded significant digits with trailing zeros
+  trimmed (`0.1 + 0.2` → `0.3`), exponent form outside `[1e-15, 1e18)`, and
+  `inf` / `-inf` / `nan`.
 * **Functions** with any number of parameters (more than six use the stack,
   as the System V ABI prescribes), recursion and mutual recursion.
 * **Block scoping** with shadowing.
 * **Freestanding output**: `_start` + syscalls, so binaries run without any
-  runtime installed. Strings from `+` / `str` / `input_line` come from a bump
-  allocator over `brk` — still no libc.
+  runtime installed. Strings and array blocks come from a bump allocator over
+  `brk` — still no libc.
 
 ## Installation
 
@@ -145,7 +155,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckc
-make test     # runs the test suite (42 tests)
+make test     # runs the test suite (59 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
@@ -175,22 +185,26 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
 ```
 
 1. **Lexer** (`src/lexer.c`) — hand-written scanner: keywords, identifiers,
-   decimal/hex integers, strings with escapes, comments, operators.
+   decimal/hex integers, float literals (point and/or exponent, careful not to
+   swallow the `..` range operator), strings with escapes, comments, operators.
 2. **Parser** (`src/parser.c`) — recursive descent producing an AST in a bump
    arena, with precedence levels exactly as specified in
    [SPEC.md](SPEC.md#61-operators-and-precedence).
-3. **Semantic analysis** (`src/sema.c`) — two passes: collect every function
-   signature (so call order does not matter), then resolve every name, check
-   every type, assign stack slots and compute frame sizes. Also performs
+3. **Semantic analysis** (`src/sema.c`) — passes that collect `const`
+   declarations and every function signature (so order does not matter), then
+   resolve every name (substituting constant literals in place), check every
+   type, assign stack slots and compute frame sizes. Also performs
    definite-return analysis.
 4. **Code generator** (`src/codegen.c`) — emits AT&T x86-64. Expressions use
    a push-machine; the compiler tracks stack depth at compile time so `%rsp`
    is always 16-byte aligned at each `call`, and stack arguments land exactly
-   where the ABI expects them.
+   where the ABI expects them. Floats travel through `%rax` as their bit
+   pattern and only enter the XMM registers for each operation.
 5. **Runtime** — emitted into every program: `_start`, `serve` support for
-   ints/bools/strings, string comparison, concatenation, `str`, `input_line`
-   and a small `brk`-based allocator — all implemented with raw `write`,
-   `read`, `brk` and `exit` syscalls.
+   ints/floats/bools/strings, float formatting, string comparison,
+   concatenation, `str`, `input_line`, array bounds checks, `push` and a small
+   `brk`-based allocator — all implemented with raw `write`, `read`, `brk` and
+   `exit` syscalls.
 
 ## Project layout
 
@@ -202,7 +216,7 @@ duck-lang/
 ├── editors/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
-├── SPEC.md            language specification v0.3.0
+├── SPEC.md            language specification v0.4.0
 ├── ROADMAP.md         requirements: delivered and planned
 ├── src/
 │   ├── common.{h,c}   arena allocator, file loading, diagnostics
@@ -213,7 +227,7 @@ duck-lang/
 │   ├── codegen.{h,c}  x86-64 backend + runtime emission
 │   ├── version.h      version constants
 │   └── main.c         duckc command line driver (as + ld invocation)
-├── examples/          hello, fibonacci, fizzbuzz
+├── examples/          hello, fibonacci, fizzbuzz, averages
 └── tests/
     ├── run_tests.sh   test harness
     ├── cases/         programs with expected stdout (and exit status)

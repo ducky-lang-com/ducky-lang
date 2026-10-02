@@ -1,1 +1,1 @@
-str() expects an 'int' or a 'bool', found 'string'
+str() expects an 'int', a 'bool' or a 'float', found 'string'

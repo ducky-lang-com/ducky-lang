@@ -69,19 +69,23 @@ all passing.**
 | # | Requirement | Notes |
 |---|---|---|
 | N1 | `for` loops (`for i in a .. b`) | done — v0.3.0; dedicated codegen (bounds evaluated once into a hidden slot), empty ranges, scoped loop variable |
-| N2 | Floats (`f64`) | new codegen paths, runtime number formatting |
-| N3 | Arrays (`[int]`) with `len`, indexing, bounds | needs runtime allocation (the `brk` bump allocator from v0.3.0 is the starting point) |
-| N4 | String operations: `+` concatenation, `len`, indexing | **partial** — `+` and `len()` done (v0.3.0); indexing open |
+| N2 | Floats (`f64`) | done — v0.4.0; `float` type + literals (`1.5`, `1e-4`), SSE2 arithmetic/comparisons (IEEE-754, incl. NaN rules), runtime formatter (15 rounded significant digits, exponent outside `[1e-15, 1e18)`, `inf`/`nan`), `float(x)`/`int(x)` conversions |
+| N3 | Arrays (`[int]`) with `len`, indexing, bounds | done — v0.4.0; all four element types, `[count][elems…]` heap blocks over the `brk` bump allocator, bounds-checked reads/writes (`duck: index out of bounds`, exit 127), reference semantics, `push()` copy-on-append, nested literals via hidden stack slots |
+| N4 | String operations: `+` concatenation, `len`, indexing | done — v0.4.0; `+`/`len()` in v0.3.0, `s[i]` returns a one-byte string (bounds-checked) |
 | N5 | Standard input: `input_line()` reading from stdin | done — v0.3.0; `read` syscall, one line per call, EOF → `""` |
 | N6 | Multiple source files / `import` | driver links several `.o` |
-| N7 | Structs and field access | |
+| N7 | Structs and field access | blocked on a nominal-types refactor |
 | N8 | `break` / `continue` | done — v0.3.0; innermost loop at any nesting depth |
-| N9 | Global constants (`const`) | |
+| N9 | Global constants (`const`) | done — v0.4.0; top-level `const NAME = <literal>;`, literals only, any declaration order, no storage (references substitute the literal), locals may shadow |
 | N10 | Better errors: multiple errors per run instead of fail-fast | recovery in parser + sema |
 | N11 | Publish the extension to Open VSX and the VS Code Marketplace | needs a publisher account |
 | N12 | File icon for `.duck` files in the explorer | done — declared as the language icon (light/dark); works with themes that have specific file icons (e.g. the default Seti) without replacing them |
 | N13 | Bitwise operators `&` `\|` `^` `~` `<<` `>>` | done — v0.3.0; C precedence, arithmetic `>>`, `int` only |
-| N14 | `str()` builtin (`int`/`bool` → `string`) | done — v0.3.0; needed because there are no implicit conversions |
+| N14 | `str()` builtin (`int`/`bool` → `string`) | done — v0.3.0; extended to `float` in v0.4.0 |
+
+**Update v0.4.0:** floats, arrays (with string indexing), `const`, `push()`
+and the numeric conversions. The suite is now **59 tests (22 runtime + 37
+error), all passing.**
 
 ## Milestone M2 — Engineering
 

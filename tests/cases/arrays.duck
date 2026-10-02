@@ -1,0 +1,42 @@
+// arrays.duck - literals, indexing, assignment, len() and push().
+fn sum(xs: [int]) -> int {
+    let t = 0;
+    for i in 0..len(xs) {
+        t = t + xs[i];
+    }
+    send t;
+}
+
+fn main() -> int {
+    let xs = [10, 20, 30];
+    serve(len(xs));          // 3
+    serve(xs[0]);            // 10
+    serve(xs[2]);            // 30
+    xs[1] = 99;
+    serve(xs[1]);            // 99
+    serve(sum(xs));          // 139
+    let ys = xs;             // reference copy
+    ys = push(ys, 40);       // push builds a new array...
+    serve(len(ys));          // 4
+    serve(len(xs));          // 3  (the old one is untouched)
+    serve(ys[3]);            // 40
+    xs[0] = 0;
+    serve(ys[0]);            // 10 (the copy lives in its own block)
+    let zs = xs;
+    zs[0] = 7;
+    serve(xs[0]);            // 7 (index assignment IS visible through aliases)
+    let fs = [1.5, 2.5];
+    serve(fs[0] + fs[1]);    // 4
+    let bs = [true, false];
+    serve(len(bs));          // 2
+    serve(bs[1]);            // false
+    let ss = ["a", "bc"];
+    serve(ss[0] + ss[1]);    // abc
+    let acc: [int] = [];
+    for i in 0..4 {
+        acc = push(acc, i * i);
+    }
+    serve(len(acc));         // 4
+    serve(acc[3]);           // 9
+    send 0;
+}

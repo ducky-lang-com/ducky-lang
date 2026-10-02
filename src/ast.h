@@ -4,31 +4,69 @@
 
 /* ---------- types ------------------------------------------------------ */
 typedef enum {
-    TY_INT,    /* 64-bit signed integer  */
-    TY_BOOL,   /* boolean                */
-    TY_STRING, /* NUL-terminated string  */
-    TY_VOID    /* no value (only for calls) */
+    TY_INT,     /* 64-bit signed integer  */
+    TY_FLOAT,   /* 64-bit IEEE-754 float  */
+    TY_BOOL,    /* boolean                */
+    TY_STRING,  /* NUL-terminated string  */
+    TY_ARR_INT,     /* [int]    fixed-length array of int    */
+    TY_ARR_FLOAT,   /* [float]  fixed-length array of float  */
+    TY_ARR_BOOL,    /* [bool]   fixed-length array of bool   */
+    TY_ARR_STRING,  /* [string] fixed-length array of string */
+    TY_VOID     /* no value (only for calls) */
 } Type;
 
 static inline const char *type_name(Type t) {
     switch (t) {
-    case TY_INT:    return "int";
-    case TY_BOOL:   return "bool";
-    case TY_STRING: return "string";
-    case TY_VOID:   return "void";
+    case TY_INT:        return "int";
+    case TY_FLOAT:      return "float";
+    case TY_BOOL:       return "bool";
+    case TY_STRING:     return "string";
+    case TY_ARR_INT:    return "[int]";
+    case TY_ARR_FLOAT:  return "[float]";
+    case TY_ARR_BOOL:   return "[bool]";
+    case TY_ARR_STRING: return "[string]";
+    case TY_VOID:       return "void";
     }
     return "?";
+}
+
+static inline int type_is_array(Type t) {
+    return t == TY_ARR_INT || t == TY_ARR_FLOAT || t == TY_ARR_BOOL ||
+           t == TY_ARR_STRING;
+}
+
+static inline Type type_elem(Type t) {
+    switch (t) {
+    case TY_ARR_INT:    return TY_INT;
+    case TY_ARR_FLOAT:  return TY_FLOAT;
+    case TY_ARR_BOOL:   return TY_BOOL;
+    case TY_ARR_STRING: return TY_STRING;
+    default:            return TY_VOID;
+    }
+}
+
+static inline Type type_array_of(Type elem) {
+    switch (elem) {
+    case TY_INT:    return TY_ARR_INT;
+    case TY_FLOAT:  return TY_ARR_FLOAT;
+    case TY_BOOL:   return TY_ARR_BOOL;
+    case TY_STRING: return TY_ARR_STRING;
+    default:        return TY_VOID;
+    }
 }
 
 /* ---------- expressions ------------------------------------------------ */
 typedef enum {
     EX_INT,
+    EX_FLOAT,
     EX_BOOL,
     EX_STRING,
     EX_VAR,
     EX_UNARY,
     EX_BINARY,
-    EX_CALL
+    EX_CALL,
+    EX_ARRAY,
+    EX_INDEX
 } ExprKind;
 
 typedef enum { UOP_NEG, UOP_NOT, UOP_BITNOT } UnaryOp;
@@ -46,7 +84,10 @@ typedef enum {
     BUILTIN_SERVE,
     BUILTIN_LEN,
     BUILTIN_STR,
-    BUILTIN_INPUT
+    BUILTIN_INPUT,
+    BUILTIN_INT,   /* int(float) -> int   */
+    BUILTIN_FLOAT, /* float(int) -> float */
+    BUILTIN_PUSH   /* push([T], T) -> [T] */
 } Builtin;
 
 typedef struct Func Func;
@@ -59,9 +100,10 @@ struct Expr {
     int col;
     Type type; /* filled in by semantic analysis */
     union {
-        long ival; /* EX_INT */
-        int bval;  /* EX_BOOL */
-        char *sval; /* EX_STRING */
+        long ival;   /* EX_INT */
+        double dval; /* EX_FLOAT */
+        int bval;    /* EX_BOOL */
+        char *sval;  /* EX_STRING */
         struct {
             char *name;
             int offset; /* stack slot, filled in by semantic analysis */
@@ -82,6 +124,15 @@ struct Expr {
             Func *fn;  /* resolved callee */
             Builtin builtin;
         } call;
+        struct {
+            Expr **elems;
+            int nelems;
+            int slot; /* hidden stack slot holding the block, set by sema */
+        } array; /* EX_ARRAY */
+        struct {
+            Expr *obj; /* array or string */
+            Expr *idx;
+        } index; /* EX_INDEX */
     };
 };
 
@@ -115,6 +166,7 @@ struct Stmt {
         } let;
         struct {
             char *name;
+            Expr *target; /* EX_INDEX when assigning to an element, else NULL */
             Expr *value;
             int offset;   /* resolved stack slot */
         } assign;
@@ -158,6 +210,17 @@ typedef struct Param {
     int col;
 } Param;
 
+/* ---------- constants ----------------------------------------------------- */
+/* A top-level `const NAME = <literal>;`. The initializer is a plain literal
+ * (int, float, bool or string); references are replaced by the literal
+ * during semantic analysis, so constants never occupy storage. */
+typedef struct Const {
+    char *name;
+    Expr *value;
+    int line;
+    int col;
+} Const;
+
 struct Func {
     char *name;
     Param **params;
@@ -172,6 +235,8 @@ struct Func {
 typedef struct Program {
     Func **funcs;
     int nfuncs;
+    Const **consts;
+    int nconsts;
 } Program;
 
 const char *unary_op_name(UnaryOp op);

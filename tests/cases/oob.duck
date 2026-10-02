@@ -1,0 +1,8 @@
+// oob.duck - a negative index fails the bounds check at run time.
+fn main() -> int {
+    let xs = [1, 2];
+    serve("before");
+    serve(xs[-1]);
+    serve("unreachable");
+    send 0;
+}

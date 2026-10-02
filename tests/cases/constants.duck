@@ -1,0 +1,23 @@
+// constants.duck - top-level 'const' declarations.
+fn read() -> int {
+    send LIMIT;             // the declaration may come later in the file
+}
+
+fn main() -> int {
+    serve(LIMIT);           // 10 (order does not matter)
+    serve(read());          // 10
+    serve(NAME + "!");      // duck!
+    serve(OK);              // true
+    serve(RATE * 2.0);      // 0.5
+    serve(len(NAME));       // 4
+    let LIMIT = 1;          // a local may shadow a constant
+    serve(LIMIT);           // 1
+    serve(BASE);            // 7
+    send 0;
+}
+
+const LIMIT = 10;
+const NAME = "duck";
+const OK = true;
+const RATE = 0.25;
+const BASE = 7;

@@ -127,12 +127,25 @@ static Type parse_type(void) {
     Token *t = peek();
     switch (t->kind) {
     case TK_KW_INT:    next(); return TY_INT;
+    case TK_KW_FLOAT:  next(); return TY_FLOAT;
     case TK_KW_BOOL:   next(); return TY_BOOL;
     case TK_KW_STRING: next(); return TY_STRING;
+    case TK_LBRACKET: {
+        next(); /* [ */
+        Type elem = parse_type();
+        expect(TK_RBRACKET, "']' to close the array type");
+        Type arr = type_array_of(elem);
+        if (arr == TY_VOID) {
+            fatal_at(P.src, t->line, t->col,
+                     "arrays of '%s' are not supported yet", type_name(elem));
+        }
+        return arr;
+    }
     default: {
         char got[64];
         describe(t, got, sizeof(got));
-        fatal_at(P.src, t->line, t->col, "expected a type (int, bool or string), found %s", got);
+        fatal_at(P.src, t->line, t->col,
+                 "expected a type (int, float, bool, string or [T]), found %s", got);
     }
     }
     return TY_VOID; /* unreachable */
@@ -148,6 +161,12 @@ static Expr *parse_primary(void) {
         e->ival = t->ival;
         return e;
     }
+    case TK_FLOAT: {
+        next();
+        Expr *e = new_expr(EX_FLOAT, t->line, t->col);
+        e->dval = t->dval;
+        return e;
+    }
     case TK_TRUE:
     case TK_FALSE: {
         next();
@@ -159,6 +178,21 @@ static Expr *parse_primary(void) {
         next();
         Expr *e = new_expr(EX_STRING, t->line, t->col);
         e->sval = t->sval;
+        return e;
+    }
+    case TK_KW_INT:
+    case TK_KW_FLOAT: {
+        /* `int(x)` and `float(x)` are conversion builtins whose names are
+         * also type keywords. They become ordinary calls when followed by
+         * '(' (parse_postfix turns the variable into a call). */
+        if (peek_at(1)->kind != TK_LPAREN) {
+            const char *kw = t->kind == TK_KW_INT ? "int" : "float";
+            fatal_at(P.src, t->line, t->col,
+                     "'%s' is a type name - use %s(x) to convert a value", kw, kw);
+        }
+        next();
+        Expr *e = new_expr(EX_VAR, t->line, t->col);
+        e->var.name = t->kind == TK_KW_INT ? "int" : "float";
         return e;
     }
     case TK_IDENT: {
@@ -173,6 +207,26 @@ static Expr *parse_primary(void) {
         expect(TK_RPAREN, "')' to close the group");
         return e;
     }
+    case TK_LBRACKET: {
+        Token *lb = next(); /* [ */
+        Vec elems = {0};
+        if (check(TK_RBRACKET)) {
+            /* An empty literal is only usable with an explicit annotation:
+             * `let xs: [int] = [];` (sema checks the annotation). */
+            next();
+            Expr *e = new_expr(EX_ARRAY, lb->line, lb->col);
+            e->array.nelems = 0;
+            return e;
+        }
+        do {
+            vec_push(&elems, parse_expr());
+        } while (accept(TK_COMMA));
+        expect(TK_RBRACKET, "']' to close the array literal");
+        Expr *e = new_expr(EX_ARRAY, lb->line, lb->col);
+        e->array.nelems = elems.len;
+        e->array.elems = vec_finish(&elems, sizeof(Expr *));
+        return e;
+    }
     default: {
         char got[64];
         describe(t, got, sizeof(got));
@@ -185,29 +239,40 @@ static Expr *parse_primary(void) {
 static Expr *parse_postfix(void) {
     Expr *e = parse_primary();
 
-    while (check(TK_LPAREN)) {
-        if (e->kind != EX_VAR) {
-            fatal_at(P.src, peek()->line, peek()->col,
-                     "only named functions can be called");
-        }
-        Token *paren = next();
+    for (;;) {
+        if (check(TK_LPAREN)) {
+            if (e->kind != EX_VAR) {
+                fatal_at(P.src, peek()->line, peek()->col,
+                         "only named functions can be called");
+            }
+            Token *paren = next();
 
-        Vec args = {0};
-        if (!check(TK_RPAREN)) {
-            do {
-                vec_push(&args, parse_expr());
-            } while (accept(TK_COMMA));
-        }
-        expect(TK_RPAREN, "')' to close the argument list");
+            Vec args = {0};
+            if (!check(TK_RPAREN)) {
+                do {
+                    vec_push(&args, parse_expr());
+                } while (accept(TK_COMMA));
+            }
+            expect(TK_RPAREN, "')' to close the argument list");
 
-        Expr *call = new_expr(EX_CALL, e->line, e->col);
-        call->call.name = e->var.name;
-        call->call.nargs = args.len;
-        call->call.args = vec_finish(&args, sizeof(Expr *));
-        (void)paren;
-        e = call;
+            Expr *call = new_expr(EX_CALL, e->line, e->col);
+            call->call.name = e->var.name;
+            call->call.nargs = args.len;
+            call->call.args = vec_finish(&args, sizeof(Expr *));
+            (void)paren;
+            e = call;
+        } else if (check(TK_LBRACKET)) {
+            next(); /* [ */
+            Expr *idx = parse_expr();
+            expect(TK_RBRACKET, "']' to close the index");
+            Expr *x = new_expr(EX_INDEX, e->line, e->col);
+            x->index.obj = e;
+            x->index.idx = idx;
+            e = x;
+        } else {
+            return e;
+        }
     }
-    return e;
 }
 
 static Expr *parse_unary(void) {
@@ -532,6 +597,35 @@ static Stmt *parse_stmt(void) {
             (void)eq;
             return s;
         }
+        if (peek_at(1)->kind == TK_LBRACKET) {
+            /* Either `xs[i] = v;` or an expression statement that starts
+             * with an index. Parse the expression first to find out. */
+            Expr *target = parse_expr();
+            if (check(TK_ASSIGN)) {
+                next(); /* = */
+                if (target->kind != EX_INDEX) {
+                    fatal_at(P.src, t->line, t->col, "invalid assignment target");
+                }
+                Stmt *s = new_stmt(ST_ASSIGN, t->line, t->col);
+                s->assign.name = NULL;
+                s->assign.target = target;
+                s->assign.value = parse_expr();
+                expect(TK_SEMI, "';' after the assignment");
+                return s;
+            }
+            if (!check(TK_SEMI)) {
+                const char *new_word = retired_keyword(t->name);
+                if (new_word) {
+                    fatal_at(P.src, t->line, t->col,
+                             "'%s' is not a Duck keyword anymore - use '%s' instead",
+                             t->name, new_word);
+                }
+            }
+            expect(TK_SEMI, "';' after the expression");
+            Stmt *s = new_stmt(ST_EXPR, target->line, target->col);
+            s->expr = target;
+            return s;
+        }
         break; /* fall through to expression statement */
     default:
         break;
@@ -596,6 +690,28 @@ static Func *parse_func(void) {
     return f;
 }
 
+static Const *parse_const(void) {
+    Token *kw = next(); /* const */
+    Token *name = expect(TK_IDENT, "a constant name after 'const'");
+    expect(TK_ASSIGN, "'=' in a 'const' declaration");
+    Expr *v = parse_expr();
+    expect(TK_SEMI, "';' after the constant declaration");
+
+    if (v->kind != EX_INT && v->kind != EX_FLOAT && v->kind != EX_BOOL &&
+        v->kind != EX_STRING) {
+        fatal_at(P.src, kw->line, kw->col,
+                 "the initializer of '%s' must be a literal (int, float, bool or string)",
+                 name->name);
+    }
+
+    Const *c = arena_alloc(sizeof(Const));
+    c->name = name->name;
+    c->value = v;
+    c->line = kw->line;
+    c->col = kw->col;
+    return c;
+}
+
 Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     P.src = src;
     P.toks = toks;
@@ -603,7 +719,12 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     P.pos = 0;
 
     Vec funcs = {0};
+    Vec consts = {0};
     while (!check(TK_EOF)) {
+        if (check(TK_CONST)) {
+            vec_push(&consts, parse_const());
+            continue;
+        }
         if (!check(TK_FN)) {
             if (check(TK_IDENT)) {
                 const char *new_word = retired_keyword(peek()->name);
@@ -616,7 +737,7 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
             char got[64];
             describe(peek(), got, sizeof(got));
             fatal_at(src, peek()->line, peek()->col,
-                     "expected a top-level function declaration ('fn'), found %s", got);
+                     "expected a top-level declaration ('fn' or 'const'), found %s", got);
         }
         vec_push(&funcs, parse_func());
     }
@@ -624,6 +745,8 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     Program *prog = arena_alloc(sizeof(Program));
     prog->nfuncs = funcs.len;
     prog->funcs = vec_finish(&funcs, sizeof(Func *));
+    prog->nconsts = consts.len;
+    prog->consts = vec_finish(&consts, sizeof(Const *));
     if (!prog->funcs) {
         fatal_at(src, 1, 1, "expected at least one function declaration");
     }

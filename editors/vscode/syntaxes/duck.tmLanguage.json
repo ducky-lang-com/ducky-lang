@@ -9,6 +9,7 @@
     { "include": "#numbers" },
     { "include": "#function-definition" },
     { "include": "#let-declaration" },
+    { "include": "#const-declaration" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -59,6 +60,10 @@
           "match": "\\b0[xX][0-9a-fA-F]+\\b"
         },
         {
+          "name": "constant.numeric.float.duck",
+          "match": "\\b[0-9]+\\.[0-9]+([eE][-+]?[0-9]+)?\\b|\\b[0-9]+[eE][-+]?[0-9]+\\b"
+        },
+        {
           "name": "constant.numeric.decimal.duck",
           "match": "\\b[0-9]+\\b"
         }
@@ -86,11 +91,22 @@
         }
       ]
     },
+    "const-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(const)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.duck" },
+            "2": { "name": "variable.other.constant.duck" }
+          }
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.control.duck",
-          "match": "\\b(fn|let|if|else|while|for|in|send|break|continue)\\b"
+          "match": "\\b(fn|const|let|if|else|while|for|in|send|break|continue)\\b"
         }
       ]
     },
@@ -98,7 +114,7 @@
       "patterns": [
         {
           "name": "storage.type.duck",
-          "match": "\\b(int|bool|string)\\b"
+          "match": "\\b(int|float|bool|string)\\b"
         }
       ]
     },
@@ -114,7 +130,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.duck",
-          "match": "\\b(serve|len|str|input_line)(?=\\s*\\()"
+          "match": "\\b(serve|len|str|input_line|push)(?=\\s*\\()"
         }
       ]
     },

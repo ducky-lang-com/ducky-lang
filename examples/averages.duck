@@ -1,0 +1,20 @@
+// averages.duck - floats, arrays and constants together.
+const MIN_SCORE = 1.0;
+
+fn average(xs: [float]) -> float {
+    let total = 0.0;
+    for i in 0..len(xs) {
+        total = total + xs[i];
+    }
+    send total / float(len(xs));
+}
+
+fn main() -> int {
+    let scores: [float] = [];
+    scores = push(scores, 2.5);
+    scores = push(scores, 3.5);
+    scores = push(scores, 4.0);
+    serve(average(scores));       // 3.33333333333333
+    serve(average(scores) >= MIN_SCORE);
+    send 0;
+}

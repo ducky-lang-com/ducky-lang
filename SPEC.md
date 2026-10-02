@@ -1,17 +1,17 @@
 # Duck Language Specification
 
-**Version 0.3.0** — this document defines the syntax and semantics accepted by
+**Version 0.4.0** — this document defines the syntax and semantics accepted by
 `duckc`, the Duck compiler.
 
 Duck is a small, statically typed, imperative language. It compiles straight to
 x86-64 machine code (Linux, System V AMD64 ABI) with no runtime and no C
 library behind it.
 
-Its keywords are the English spellings `fn`, `let`, `if`, `else`, `while`,
-`for`, `in`, `send`, `break` and `continue`, plus `true`/`false` and the type
-names `int`, `bool` and `string`. The output builtin is `serve`. The Duck-era
-words `wing`, `nest`, `when` and `otherwise` (canonical only in v0.2.0) and the
-older `return` and `print` are ordinary identifiers now.
+Its keywords are the English spellings `fn`, `const`, `let`, `if`, `else`,
+`while`, `for`, `in`, `send`, `break` and `continue`, plus `true`/`false` and
+the type names `int`, `float`, `bool` and `string`. The output builtin is
+`serve`. The Duck-era words `wing`, `nest`, `when` and `otherwise` (canonical
+only in v0.2.0) and the older `return` and `print` are ordinary identifiers now.
 
 ---
 
@@ -68,11 +68,12 @@ Identifiers are case sensitive.
 
 | | | |
 |---|---|---|
-| `fn` | `let` | `if` |
-| `else` | `while` | `for` |
-| `in` | `send` | `break` |
-| `continue` | `true` | `false` |
-| `int` | `bool` | `string` |
+| `fn` | `const` | `let` |
+| `if` | `else` | `while` |
+| `for` | `in` | `send` |
+| `break` | `continue` | `true` |
+| `false` | `int` | `float` |
+| `bool` | `string` | |
 
 The retired words `wing`, `nest`, `when`, `otherwise`, `return` and `print`
 are **not** keywords: they parse as ordinary identifiers, so `wingman` or a
@@ -89,7 +90,21 @@ integer; there are no suffixes.
 int-literal := decimal-digits | '0' ('x' | 'X') hex-digits
 ```
 
-### 2.6 String literals
+### 2.6 Float literals
+
+A decimal point (`1.5`, `0.001`) and/or an exponent (`1e10`, `2.5e-4`). A `.`
+directly followed by another `.` is the `for` range operator, so `0 .. 5` and
+`0..5` both lex as two integers and a `..`; a float needs at least one digit
+before the point (`.5` is not a literal). Float literals are parsed at compile
+time with the C `strtod` rules (binary64).
+
+```
+float-literal := decimal-digits '.' decimal-digits [ exponent ]
+               | decimal-digits exponent
+exponent      := ('e' | 'E') [ '+' | '-' ] decimal-digits
+```
+
+### 2.7 String literals
 
 Double quoted, may not span lines. Escape sequences: `\n`, `\t`, `\r`,
 `\\`, `\"`. A string cannot contain a NUL byte.
@@ -106,26 +121,59 @@ escape         := '\n' | '\t' | '\r' | '\\' | '\"'
 | Type | Representation | Literals |
 |---|---|---|
 | `int` | 64-bit signed two's complement | `0`, `-7`, `0xFF` |
+| `float` | 64-bit IEEE-754 binary64 | `1.5`, `0.25`, `1e10` |
 | `bool` | boolean | `true`, `false` |
 | `string` | pointer to NUL-terminated bytes | `"duck"` |
+| `[int]`, `[float]`, `[bool]`, `[string]` | pointer to a heap block `[count][elems…]` | `[1, 2, 3]`, `[]` (with annotation) |
 | `void` | no value | only produced by calls; cannot be stored |
 
 There are **no implicit conversions**: `1 + true` is an error, not a `2`, and
-`5 & (3 == 1)` is an error too (a `bool` does not become an `int`).
+`1 + 1.5` is an error too (an `int` does not become a `float`). Convert
+explicitly with `float(x)` (int → float) or `int(x)` (float → int,
+truncating toward zero).
 
 `void` values only exist as the result of calls to functions that do not return
 anything (and of `serve`). A `void` value cannot be assigned, returned,
 compared, passed as an argument or handed to `serve`.
 
 Strings are immutable values: `+` does not modify its operands, it builds a
-new string.
+new string, and no expression can write into one (`s[0] = "x"` is an error).
+
+### 3.1 Arrays
+
+Arrays have a **fixed element type** (one of the four above) and a **fixed
+length** decided by the literal that creates them:
+
+```duck
+let xs = [1, 2, 3];        // [int], length 3
+let fs: [float] = [];      // empty, only with an annotation
+```
+
+* **Length** comes from `len(array)`; it never changes.
+* **Elements** are read with `xs[i]` and written with `xs[i] = v`. Every
+  access is bounds-checked at run time: an index outside `0 .. len-1`
+  (including negative indexes) prints `duck: index out of bounds` to standard
+  error and exits with status `127`.
+* **Arrays are references.** `let ys = xs` makes `ys` point at the same block,
+  so `xs[0] = 7` is visible through `ys`. `push(xs, v)` is the exception: it
+  copies into a **new** array and returns it (`xs = push(xs, v)`), leaving the
+  old one untouched for everyone still holding it.
+* **Growing**: `push(array, value) -> array` returns a new array with the value
+  appended. Together with an annotated empty literal this builds arrays of
+  unknown length in a loop.
+* **Nested arrays** (`[[int]]`) are not supported yet.
+* Arrays cannot be compared with `==` — compare elements instead.
+* Elements live in 8-byte slots: `int`, `float`, `bool` and `string` values
+  (pointers) are stored as-is.
+
+`const` declarations may also be of any of the scalar types (see §4).
 
 ---
 
 ## 4. Program structure
 
-A program is a sequence of top-level function declarations. There are no
-globals and no separate declarations: **the entry point is**
+A program is a sequence of top-level declarations: **functions** (`fn`) and
+**constants** (`const`). There are no mutable globals: **the entry point is**
 
 ```duck
 fn main() -> int { ... }
@@ -133,6 +181,25 @@ fn main() -> int { ... }
 
 `main` must take no parameters and return `int`. Its return value becomes the
 process exit status.
+
+### 4.1 Constants
+
+```duck
+const LIMIT = 10;
+const NAME = "duck";
+const OK = true;
+const RATE = 0.25;
+```
+
+* The initializer must be a **single literal** (`int`, `float`, `bool` or
+  `string`) — no expressions and no other constants in it (v0.4.0).
+* The name must be a plain identifier: it may not start with `_` or `duck_`,
+  may not be a builtin, and may not collide with a function or another
+  constant.
+* Declaration order does not matter: a constant may be used before its
+  declaration in the file.
+* A constant occupies no storage — every reference is replaced by its literal
+  during compilation. A local `let` may shadow a constant inside its scope.
 
 Functions may be used before they are declared, so mutual recursion works:
 
@@ -157,22 +224,27 @@ Omitting `-> type` gives the function return type `void`.
 ### 5.1 Declarations
 
 ```duck
-let x = 10;          // type inferred from the initializer
-let y: int = 10;     // explicit annotation (must match exactly)
+let x = 10;              // type inferred from the initializer
+let y: int = 10;         // explicit annotation (must match exactly)
+let xs = [1, 2, 3];      // [int] inferred from the elements
+let empty: [float] = []; // an empty literal needs an annotation
 ```
 
 A variable is visible from its declaration to the end of the enclosing block.
 Redeclaring a name in the same scope is an error; shadowing an outer scope is
-allowed.
+allowed (including shadowing a `const`).
 
 ### 5.2 Assignment
 
 ```duck
 x = x + 1;
+xs[0] = 42;          // element of an array
 ```
 
 The variable must already exist and the value type must match exactly.
-Assignment is a statement, not an expression.
+Assignment is a statement, not an expression. An element assignment requires
+an **array** on the left (`s[0] = "x"` is an error: strings are immutable);
+the index must be an `int` and is bounds-checked at run time.
 
 ### 5.3 Expression statement
 
@@ -273,7 +345,7 @@ From lowest to highest binding:
 | 9 | `+` `-` | left |
 | 10 | `*` `/` `%` | left |
 | 11 | unary `-` `!` `~` | right (prefix) |
-| 12 | `f(args)` `(...)` | — |
+| 12 | `f(args)` `(...)` `a[i]` | — |
 
 The precedence follows C (there are no ternary or comma operators). `&&` and
 `||` **short-circuit**: the right operand is not evaluated when the result is
@@ -287,18 +359,24 @@ mean.
 
 | Expression | Operand types | Result |
 |---|---|---|
-| `a - b`, `a * b`, `a / b`, `a % b` | `int`, `int` | `int` |
-| `a + b` | `int`, `int` (add) or `string`, `string` (concatenation) | `int` / `string` |
+| `a - b`, `a * b`, `a / b` | `int`,`int` or `float`,`float` | same type |
+| `a % b` | `int`, `int` | `int` |
+| `a + b` | `int`,`int` (add), `float`,`float` (add) or `string`,`string` (concat) | same type |
 | `a & b`, `a \| b`, `a ^ b`, `a << b`, `a >> b` | `int`, `int` | `int` |
-| `a < b`, `a <= b`, `a > b`, `a >= b` | `int`, `int` | `bool` |
-| `a == b`, `a != b` | any two values of the *same* type (`int`, `bool`, `string`) | `bool` |
+| `a < b`, `a <= b`, `a > b`, `a >= b` | `int`,`int` or `float`,`float` | `bool` |
+| `a == b`, `a != b` | any two values of the *same* type (`int`, `float`, `bool`, `string`) | `bool` |
 | `a && b`, `a \|\| b` | `bool`, `bool` | `bool` |
-| `-a`, `~a` | `int` | `int` |
+| `-a` | `int` or `float` | same type |
+| `~a` | `int` | `int` |
 | `!a` | `bool` | `bool` |
+| `a[i]` | `i` is `int`; `a` is an array (element type) or a `string` (`string`) | element type |
+| `a == b` on arrays | — | **error** (compare elements) |
 
 Strings are compared **by content**, not by address. Mixing operands of
 different types in `+` (for example `"n = " + 42`) is an error: there is no
-implicit conversion — use `str(...)`.
+implicit conversion — use `str(...)` for `int`/`float`/`bool` and
+`float(x)` / `int(x)` between the numeric types. Mixing `int` and `float`
+anywhere (arithmetic, comparison) is likewise an error.
 
 ### 6.3 Numeric semantics
 
@@ -311,6 +389,21 @@ implicit conversion — use `str(...)`.
   pattern.
 * `>>` is **arithmetic**: it extends the sign (`-16 >> 2 == -4`). The shift
   count is used modulo 64 (x86-64 semantics), so shifting by 64 or more wraps.
+
+Floats are IEEE-754 binary64 with the hardware semantics:
+
+* Division follows IEEE-754: `1.0 / 0.0` is `inf`, `-1.0 / 0.0` is `-inf`
+  and `0.0 / 0.0` is `nan` (integers still trap with SIGFPE on `/0`).
+* Comparisons are IEEE-754: everything involving `nan` is false **except**
+  `!=`, which is true.
+* `serve`/`str` print **15 significant digits, rounded** (not truncated) with
+  trailing zeros trimmed: `0.1 + 0.2` prints `0.3`, `1.0 / 3.0` prints
+  `0.333333333333333`, `2.675` prints `2.675`. Outside
+  `[1e-15, 1e18)` the exponent form is used: `1e20` prints `1e+20`,
+  `1e-20` prints `1e-20`. Special values print as `inf`, `-inf`, `nan`;
+  both zeros print `0`.
+* `int(x)` truncates toward zero (`int(-2.99) == -2`). Converting a `float`
+  outside the `int` range yields the platform's integer-indeterminate value.
 
 ### 6.4 Evaluation order
 
@@ -335,26 +428,33 @@ value.
 
 | Call | Result | Description |
 |---|---|---|
-| `serve(value)` | `void` | Writes `value` (`int`, `bool` or `string`) to standard output followed by a newline, using raw `write` syscalls (unbuffered). |
-| `len(s)` | `int` | Length of a string in bytes (no argument other than one `string` is accepted). |
-| `str(value)` | `string` | Decimal text of an `int` (`str(-7) == "-7"`), or `"true"` / `"false"` of a `bool`. |
+| `serve(value)` | `void` | Writes `value` (`int`, `float`, `bool` or `string`) to standard output followed by a newline, using raw `write` syscalls (unbuffered). Arrays and `void` are rejected. |
+| `len(x)` | `int` | Length of a string in bytes, or the number of elements of an array. |
+| `str(value)` | `string` | Decimal text of an `int` (`str(-7) == "-7"`), the float form of a `float` (§6.3), or `"true"` / `"false"` of a `bool`. |
 | `input_line()` | `string` | Reads one line from standard input and returns it without the trailing newline. At EOF returns `""`. Reads at most 4095 bytes per call; a longer line continues on the next call. |
+| `float(x)` | `float` | Converts an `int` to `float` (exact for values up to 2^53). |
+| `int(x)` | `int` | Converts a `float` to `int`, truncating toward zero. |
+| `push(a, v)` | array | Returns a **new** array with `v` appended to `a`; `a` must be an array and `v` its element type. |
 
 `str` returns a fresh string on the heap (except the constant `true`/`false`,
 which points at static memory), so it can be concatenated freely. Builtins
-cannot be redefined as user functions.
+cannot be redefined as user functions or constants.
 
 ---
 
 ## 8. Grammar (EBNF)
 
 ```ebnf
-program      := func-decl { func-decl } ;
+program      := { func-decl | const-decl } ;
 
 func-decl    := "fn" IDENT "(" [ param-list ] ")" [ "->" type ] block ;
 param-list   := param { "," param } ;
 param        := IDENT ":" type ;
-type         := "int" | "bool" | "string" ;
+const-decl   := "const" IDENT "=" literal ";" ;
+type         := "int" | "float" | "bool" | "string"
+              | "[" type "]" ;                (* one level: [int] etc. *)
+
+literal      := INT | FLOAT | STRING | "true" | "false" ;
 
 block        := "{" { stmt } "}" ;
 
@@ -370,7 +470,8 @@ stmt         := let-stmt
               | expr ";" ;
 
 let-stmt     := "let" IDENT [ ":" type ] "=" expr ";" ;
-assign-stmt  := IDENT "=" expr ";" ;
+assign-stmt  := IDENT "=" expr ";"
+              | IDENT "[" expr "]" "=" expr ";" ;
 if-stmt      := "if" expr block [ "else" ( if-stmt | block ) ] ;
 while-stmt   := "while" expr block ;
 for-stmt     := "for" IDENT "in" expr ".." expr block ;
@@ -390,9 +491,11 @@ shift-expr   := add-expr { ( "<<" | ">>" ) add-expr } ;
 add-expr     := mul-expr { ( "+" | "-" ) mul-expr } ;
 mul-expr     := unary { ( "*" | "/" | "%" ) unary } ;
 unary        := ( "-" | "!" | "~" ) unary | postfix ;
-postfix      := primary [ "(" [ args ] ")" ] ;
+postfix      := primary { "(" [ args ] ")" | "[" expr "]" } ;
 args         := expr { "," expr } ;
-primary      := INT | STRING | "true" | "false" | IDENT | "(" expr ")" ;
+primary      := INT | FLOAT | STRING | "true" | "false" | IDENT
+              | array-literal | "(" expr ")" ;
+array-literal := "[" [ expr { "," expr } ] "]" ;
 ```
 
 ---
@@ -400,13 +503,14 @@ primary      := INT | STRING | "true" | "false" | IDENT | "(" expr ")" ;
 ## 9. Reserved names
 
 * All keywords in §2.4.
-* The builtin function names `serve`, `len`, `str` and `input_line` (they
-  cannot be redefined).
+* The builtin function names `serve`, `len`, `str`, `input_line`, `float`,
+  `int` and `push` (they cannot be redefined).
 * Function names starting with `_`.
 * Function names starting with `duck_` (the generated runtime owns
-  `duck_serve_int`, `duck_serve_bool`, `duck_serve_str`, `duck_streq`,
-  `duck_strlen`, `duck_alloc`, `duck_concat`, `duck_str_int`, `duck_str_bool`,
-  `duck_input` and the data symbol `duck_brk`).
+  `duck_serve_int`, `duck_serve_bool`, `duck_serve_str`, `duck_serve_float`,
+  `duck_streq`, `duck_strlen`, `duck_alloc`, `duck_concat`, `duck_str_int`,
+  `duck_str_bool`, `duck_str_float`, `duck_fmt_float`, `duck_str_at`,
+  `duck_push`, `duck_oob`, `duck_input` and the data symbol `duck_brk`).
 
 Local variables and parameters have no such restriction.
 
@@ -435,9 +539,17 @@ The generated executable is a freestanding ELF binary:
 * `serve` writes directly with syscall 1; `input_line` reads with syscall 0;
 * no libc, no interpreter, no virtual machine.
 
-**Memory.** Strings produced by `+`, by `str` and by `input_line` come from a
-small bump allocator that grows the program break (`brk` syscall). Memory is
-never freed — there is no garbage collector. If the program exhausts memory it
-writes `duck: out of memory` to standard error and exits with status `127`.
+**Memory.** Strings produced by `+`, by `str` and by `input_line`, and all
+array blocks, come from a small bump allocator that grows the program break
+(`brk` syscall). Memory is never freed — there is no garbage collector. If
+the program exhausts memory it writes `duck: out of memory` to standard error
+and exits with status `127`.
+
+**Arrays.** An array is one heap block laid out as
+`[count:int64][elem0]…[elemN-1]`; the variable holds a pointer, so copies
+share the block. Every read and write checks `0 <= index < count`
+(unsignedly, so negatives are caught) and exits with
+`duck: index out of bounds` and status `127` on failure. `push` allocates a
+new block and copies the old contents.
 
 Requirements: Linux x86-64, GNU `as` and `ld` to assemble and link.

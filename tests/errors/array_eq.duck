@@ -1,0 +1,5 @@
+fn main() -> int {
+    let xs = [1, 2];
+    serve(xs == xs);
+    send 0;
+}
