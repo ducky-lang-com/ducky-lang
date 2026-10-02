@@ -258,7 +258,7 @@ Quick start:
   cat > hello.duck <<'DUCK'
   fn main() -> int {
       serve("Hello, Ducky!");
-      return 0;
+      send 0;
   }
   DUCK
   duckyc hello.duck -o hello && ./hello
