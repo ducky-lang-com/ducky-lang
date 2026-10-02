@@ -2,7 +2,7 @@
   "name": "duck-lang",
   "displayName": "Duck",
   "description": "Syntax highlighting and language support for the Duck programming language (duck-lang)",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "didacg",
   "icon": "assets/icon.png",
   "engines": {
