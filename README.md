@@ -32,14 +32,17 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
-v0.5.0 — adds **structs**: `struct Point { x: int, y: int }` declarations
-with positional construction (`Point(3, 4)`), field reads and writes (`p.x`,
-`p.x = 10`), reference semantics between variables, structs as parameters,
-return values and fields, and declaration order that does not matter. On top
-of v0.4.0's floats, arrays, string indexing and `const`; v0.3.0 introduced the
-English keywords (`fn`, `let`, `if`, `else`, `send`, `serve`); the Duck-era
-words `wing`, `nest`, `when`, `otherwise` (and the older `return`, `print`)
-are ordinary identifiers now and are rejected with a hint when used as syntax.
+v0.6.0 — adds **multi-file programs**: `import "lib/utils.duck";` at the top
+level pulls other source files into the program. Imports resolve relative to
+the importing file, follow transitively, load each file only once (diamonds
+and cycles are fine) and all files share one global namespace — functions,
+structs and constants are visible across files, and errors name the file they
+occur in. On top of v0.5.0's structs (`struct Point { x: int, y: int }` with
+positional construction `Point(3, 4)` and field access `p.x`), v0.4.0's
+floats, arrays, string indexing and `const`; v0.3.0 introduced the English
+keywords (`fn`, `let`, `if`, `else`, `send`, `serve`); the Duck-era words
+`wing`, `nest`, `when`, `otherwise` (and the older `return`, `print`) are
+ordinary identifiers now and are rejected with a hint when used as syntax.
 See [ROADMAP.md](ROADMAP.md) for the requirements this release covers and what
 comes next.
 
@@ -54,6 +57,12 @@ comes next.
   (`Point(3, 4)`), field access and assignment (`p.x`, `p.x = 10`), reference
   semantics (assignments share the value, like arrays), structs as parameters,
   return values and fields, and free declaration order.
+* **Multi-file programs**: `import "lib/utils.duck";` at the top level pulls
+  a source file into the program. Paths are relative to the importing file,
+  imports follow transitively, every file is loaded at most once (diamonds
+  and cycles are fine), and all files share one global namespace — functions,
+  structs and constants can be used across files, with diagnostics that name
+  the file they occur in.
 * **Functions and variables** with `fn` / `let` (type inference or explicit
   annotation), `send` for returns, `serve` for output, and top-level `const`
   declarations (`const LIMIT = 10;` — literals only, order does not matter).
@@ -161,7 +170,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckc
-make test     # runs the test suite (78 tests)
+make test     # runs the test suite (85 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
@@ -181,6 +190,17 @@ duckc [options] <file.duck>
 Without `-o`, the output name is derived from the input file
 (`duckc hello.duck` produces `./hello`).
 
+A program can span several files:
+
+```duck
+import "lib/utils.duck";   // path relative to this file
+
+fn main() -> int {
+    serve(helper());
+    send 0;
+}
+```
+
 ## How it works
 
 ```
@@ -195,7 +215,10 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
    swallow the `..` range operator), strings with escapes, comments, operators.
 2. **Parser** (`src/parser.c`) — recursive descent producing an AST in a bump
    arena, with precedence levels exactly as specified in
-   [SPEC.md](SPEC.md#61-operators-and-precedence).
+   [SPEC.md](SPEC.md#61-operators-and-precedence). Programs are loaded file
+   by file (`import`): each file is parsed with its own token stream — so
+   diagnostics name that file — and the declarations of every file are merged
+   into one program before analysis.
 3. **Semantic analysis** (`src/sema.c`) — passes that collect `const`
    declarations and every function signature (so order does not matter), then
    resolve every name (substituting constant literals in place), check every
@@ -222,7 +245,7 @@ duck-lang/
 ├── editors/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
-├── SPEC.md            language specification v0.5.0
+├── SPEC.md            language specification v0.6.0
 ├── ROADMAP.md         requirements: delivered and planned
 ├── src/
 │   ├── common.{h,c}   arena allocator, file loading, diagnostics
@@ -233,7 +256,7 @@ duck-lang/
 │   ├── codegen.{h,c}  x86-64 backend + runtime emission
 │   ├── version.h      version constants
 │   └── main.c         duckc command line driver (as + ld invocation)
-├── examples/          hello, fibonacci, fizzbuzz, averages, structs
+├── examples/          hello, fibonacci, fizzbuzz, averages, structs, imports
 └── tests/
     ├── run_tests.sh   test harness
     ├── cases/         programs with expected stdout (and exit status)

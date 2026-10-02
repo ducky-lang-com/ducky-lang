@@ -1,0 +1,3 @@
+fn imported_ok() -> int {
+    send 1;
+}

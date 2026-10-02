@@ -1,16 +1,16 @@
 # Duck Language Specification
 
-**Version 0.5.0** — this document defines the syntax and semantics accepted by
+**Version 0.6.0** — this document defines the syntax and semantics accepted by
 `duckc`, the Duck compiler.
 
 Duck is a small, statically typed, imperative language. It compiles straight to
 x86-64 machine code (Linux, System V AMD64 ABI) with no runtime and no C
 library behind it.
 
-Its keywords are the English spellings `fn`, `struct`, `const`, `let`, `if`,
-`else`, `while`, `for`, `in`, `send`, `break` and `continue`, plus
-`true`/`false` and the type names `int`, `float`, `bool` and `string`. The
-output builtin is `serve`. The Duck-era words `wing`, `nest`, `when` and
+Its keywords are the English spellings `fn`, `struct`, `import`, `const`,
+`let`, `if`, `else`, `while`, `for`, `in`, `send`, `break` and `continue`,
+plus `true`/`false` and the type names `int`, `float`, `bool` and `string`.
+The output builtin is `serve`. The Duck-era words `wing`, `nest`, `when` and
 `otherwise` (canonical only in v0.2.0) and the older `return` and `print` are
 ordinary identifiers now.
 
@@ -69,12 +69,13 @@ Identifiers are case sensitive.
 
 | | | |
 |---|---|---|
-| `fn` | `struct` | `const` |
-| `let` | `if` | `else` |
-| `while` | `for` | `in` |
-| `send` | `break` | `continue` |
-| `true` | `false` | `int` |
-| `float` | `bool` | `string` |
+| `fn` | `struct` | `import` |
+| `const` | `let` | `if` |
+| `else` | `while` | `for` |
+| `in` | `send` | `break` |
+| `continue` | `true` | `false` |
+| `int` | `float` | `bool` |
+| `string` | | |
 
 The retired words `wing`, `nest`, `when`, `otherwise`, `return` and `print`
 are **not** keywords: they parse as ordinary identifiers, so `wingman` or a
@@ -211,9 +212,10 @@ struct Point {
 
 ## 4. Program structure
 
-A program is a sequence of top-level declarations: **functions** (`fn`),
-**structs** (`struct`) and **constants** (`const`). There are no mutable
-globals: **the entry point is**
+A program starts from the single file given to `duckc`. That file is a
+sequence of top-level declarations: **functions** (`fn`), **structs**
+(`struct`), **constants** (`const`) and **imports** (`import`, §4.2). There
+are no mutable globals: **the entry point is**
 
 ```duck
 fn main() -> int { ... }
@@ -256,6 +258,30 @@ fn is_odd(n: int) -> bool {
 ```
 
 Omitting `-> type` gives the function return type `void`.
+
+### 4.2 Source files and `import`
+
+```duck
+import "lib/utils.duck";
+import "../shared/types.duck";
+```
+
+* An `import` statement may appear **only at the top level** and takes a
+  string literal containing the complete file name, extension included
+  (v0.6.0). `import` inside a function body is an error.
+* The path is resolved **relative to the directory of the file that contains
+  the statement**; an absolute path is used as written.
+* Imported files may import further files. The whole graph is loaded depth
+  first and each file is loaded **at most once**, no matter how many times it
+  is reached (diamond) or whether the imports form a cycle.
+* Every file of the program shares **one global namespace**: functions,
+  structs and constants declared anywhere are visible everywhere, declaration
+  order does not matter across files, and duplicate names in different files
+  are rejected exactly like duplicates inside a single file.
+* `main` may live in any file of the program.
+* Each file is parsed with its own token stream, so errors always name the
+  file, line and column they occur in - a type error in an imported file is
+  reported against that file, not against the root.
 
 ---
 
@@ -493,8 +519,9 @@ cannot be redefined as user functions, structs or constants.
 ## 8. Grammar (EBNF)
 
 ```ebnf
-program      := { func-decl | struct-decl | const-decl } ;
+program      := { import-decl | func-decl | struct-decl | const-decl } ;
 
+import-decl  := "import" STRING ";" ;
 func-decl    := "fn" IDENT "(" [ param-list ] ")" [ "->" type ] block ;
 param-list   := param { "," param } ;
 param        := IDENT ":" type ;
@@ -580,6 +607,9 @@ prog.duck:3:13: error: operator '+' requires 'int' operands, found 'int' and 'bo
     serve(1 + true);
             ^
 ```
+
+With `import` (§4.2) a program spans several files; the reported file is
+always the file the error occurs in.
 
 The compiler stops at the first error and exits with status `1`.
 

@@ -26,6 +26,15 @@ static Scope *g_scope;
 static int g_slots; /* parameters + locals declared so far */
 static int g_loops; /* loop nesting depth, for break/continue checks */
 
+static void err_at(const SourceFile *src, int line, int col, const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    fatal_at(src, line, col, "%s", buf);
+}
+
 static void err(int line, int col, const char *fmt, ...) {
     char buf[512];
     va_list ap;
@@ -34,6 +43,11 @@ static void err(int line, int col, const char *fmt, ...) {
     va_end(ap);
     fatal_at(g_src, line, col, "%s", buf);
 }
+
+/* Report an error at a node's position, in the file the node came from.
+ * Programs can be assembled from several source files with `import`, so the
+ * file is part of the node and not a global property of the compilation. */
+#define err_node(n, ...) err_at((n)->src, (n)->line, (n)->col, __VA_ARGS__)
 
 static int starts_with(const char *s, const char *prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;
@@ -95,9 +109,10 @@ static int alloc_slot(void) {
     return -8 * g_slots;
 }
 
-static Var *declare_var(const char *name, Type type, int line, int col) {
+static Var *declare_var(const char *name, Type type, const SourceFile *src,
+                        int line, int col) {
     if (find_var_current(name)) {
-        err(line, col, "redefinition of '%s' in this scope", name);
+        err_at(src, line, col, "redefinition of '%s' in this scope", name);
     }
     Var *v = arena_alloc(sizeof(Var));
     v->name = name;
@@ -172,11 +187,11 @@ static Type check_expr(Expr *e) {
             return e->type = lit->type;
         }
         if (struct_type_lookup(e->var.name)) {
-            err(e->line, e->col,
+            err_node(e,
                 "'%s' is a struct type - construct a value with %s(...)",
                 e->var.name, e->var.name);
         }
-        err(e->line, e->col, "undefined variable '%s'", e->var.name);
+        err_node(e, "undefined variable '%s'", e->var.name);
         return e->type = TY_VOID; /* unreachable */
     }
 
@@ -184,19 +199,19 @@ static Type check_expr(Expr *e) {
         Type t = check_expr(e->unary.operand);
         if (e->unary.op == UOP_NEG) {
             if (t != TY_INT && t != TY_FLOAT) {
-                err(e->line, e->col, "unary '-' requires 'int' or 'float', found '%s'",
+                err_node(e, "unary '-' requires 'int' or 'float', found '%s'",
                     type_name(t));
             }
             return e->type = t;
         }
         if (e->unary.op == UOP_BITNOT) {
             if (t != TY_INT) {
-                err(e->line, e->col, "unary '~' requires 'int', found '%s'", type_name(t));
+                err_node(e, "unary '~' requires 'int', found '%s'", type_name(t));
             }
             return e->type = TY_INT;
         }
         if (t != TY_BOOL) {
-            err(e->line, e->col, "unary '!' requires 'bool', found '%s'", type_name(t));
+            err_node(e, "unary '!' requires 'bool', found '%s'", type_name(t));
         }
         return e->type = TY_BOOL;
     }
@@ -210,7 +225,7 @@ static Type check_expr(Expr *e) {
         case BOP_AND:
         case BOP_OR:
             if (l != TY_BOOL || r != TY_BOOL) {
-                err(e->line, e->col, "operator '%s' requires 'bool' operands, found '%s' and '%s'",
+                err_node(e, "operator '%s' requires 'bool' operands, found '%s' and '%s'",
                     binary_op_name(op), type_name(l), type_name(r));
             }
             return e->type = TY_BOOL;
@@ -220,7 +235,7 @@ static Type check_expr(Expr *e) {
              * strings; nothing is converted implicitly. */
             if (l == TY_FLOAT || r == TY_FLOAT) {
                 if (l != TY_FLOAT || r != TY_FLOAT) {
-                    err(e->line, e->col,
+                    err_node(e,
                         "operator '+' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
                         type_name(l), type_name(r));
                 }
@@ -228,14 +243,14 @@ static Type check_expr(Expr *e) {
             }
             if (l == TY_STRING || r == TY_STRING) {
                 if (l != TY_STRING || r != TY_STRING) {
-                    err(e->line, e->col,
+                    err_node(e,
                         "operator '+' requires two 'string' values to concatenate or two 'int' values to add, found '%s' and '%s'",
                         type_name(l), type_name(r));
                 }
                 return e->type = TY_STRING;
             }
             if (l != TY_INT || r != TY_INT) {
-                err(e->line, e->col, "operator '+' requires 'int' operands, found '%s' and '%s'",
+                err_node(e, "operator '+' requires 'int' operands, found '%s' and '%s'",
                     type_name(l), type_name(r));
             }
             return e->type = TY_INT;
@@ -245,14 +260,14 @@ static Type check_expr(Expr *e) {
         case BOP_DIV:
             if (l == TY_FLOAT || r == TY_FLOAT) {
                 if (l != TY_FLOAT || r != TY_FLOAT) {
-                    err(e->line, e->col,
+                    err_node(e,
                         "operator '%s' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
                         binary_op_name(op), type_name(l), type_name(r));
                 }
                 return e->type = TY_FLOAT;
             }
             if (l != TY_INT || r != TY_INT) {
-                err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
+                err_node(e, "operator '%s' requires 'int' operands, found '%s' and '%s'",
                     binary_op_name(op), type_name(l), type_name(r));
             }
             return e->type = TY_INT;
@@ -264,7 +279,7 @@ static Type check_expr(Expr *e) {
         case BOP_SHL:
         case BOP_SHR:
             if (l != TY_INT || r != TY_INT) {
-                err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
+                err_node(e, "operator '%s' requires 'int' operands, found '%s' and '%s'",
                     binary_op_name(op), type_name(l), type_name(r));
             }
             return e->type = TY_INT;
@@ -275,14 +290,14 @@ static Type check_expr(Expr *e) {
         case BOP_GE:
             if (l == TY_FLOAT || r == TY_FLOAT) {
                 if (l != TY_FLOAT || r != TY_FLOAT) {
-                    err(e->line, e->col,
+                    err_node(e,
                         "operator '%s' requires two 'float' values or two 'int' values - Duck has no implicit conversion (use float(x)), found '%s' and '%s'",
                         binary_op_name(op), type_name(l), type_name(r));
                 }
                 return e->type = TY_BOOL;
             }
             if (l != TY_INT || r != TY_INT) {
-                err(e->line, e->col, "operator '%s' requires 'int' operands, found '%s' and '%s'",
+                err_node(e, "operator '%s' requires 'int' operands, found '%s' and '%s'",
                     binary_op_name(op), type_name(l), type_name(r));
             }
             return e->type = TY_BOOL;
@@ -290,19 +305,19 @@ static Type check_expr(Expr *e) {
         case BOP_EQ:
         case BOP_NE:
             if (l != r) {
-                err(e->line, e->col, "cannot compare a value of type '%s' with a value of type '%s'",
+                err_node(e, "cannot compare a value of type '%s' with a value of type '%s'",
                     type_name(l), type_name(r));
             }
             if (l == TY_VOID) {
-                err(e->line, e->col, "values of type 'void' cannot be compared");
+                err_node(e, "values of type 'void' cannot be compared");
             }
             if (type_is_array(l)) {
-                err(e->line, e->col,
+                err_node(e,
                     "arrays cannot be compared with '%s' - compare elements instead",
                     binary_op_name(op));
             }
             if (l >= TY_STRUCT_BASE) {
-                err(e->line, e->col,
+                err_node(e,
                     "struct values cannot be compared with '%s' - compare fields instead",
                     binary_op_name(op));
             }
@@ -313,23 +328,23 @@ static Type check_expr(Expr *e) {
 
     case EX_ARRAY: {
         if (e->array.nelems == 0) {
-            err(e->line, e->col,
+            err_node(e,
                 "cannot infer the type of an empty array literal - declare the type, as in 'let xs: [int] = []'");
         }
         Type et = check_expr(e->array.elems[0]);
         for (int i = 1; i < e->array.nelems; i++) {
             Type t = check_expr(e->array.elems[i]);
             if (t != et) {
-                err(e->array.elems[i]->line, e->array.elems[i]->col,
+                err_node(e->array.elems[i],
                     "array elements must all have the same type: found '%s' and '%s'",
                     type_name(et), type_name(t));
             }
         }
         if (et == TY_VOID) {
-            err(e->line, e->col, "cannot store a value of type 'void' in an array");
+            err_node(e, "cannot store a value of type 'void' in an array");
         }
         if (type_is_array(et) || et >= TY_STRUCT_BASE) {
-            err(e->line, e->col, "arrays of '%s' are not supported yet", type_name(et));
+            err_node(e, "arrays of '%s' are not supported yet", type_name(et));
         }
         e->array.slot = alloc_slot();
         return e->type = type_array_of(et);
@@ -339,12 +354,12 @@ static Type check_expr(Expr *e) {
         Type ot = check_expr(e->index.obj);
         Type it = check_expr(e->index.idx);
         if (it != TY_INT) {
-            err(e->index.idx->line, e->index.idx->col,
+            err_node(e->index.idx,
                 "an index must be an 'int', found '%s'", type_name(it));
         }
         if (type_is_array(ot)) return e->type = type_elem(ot);
         if (ot == TY_STRING) return e->type = TY_STRING;
-        err(e->line, e->col, "cannot index a value of type '%s'", type_name(ot));
+        err_node(e, "cannot index a value of type '%s'", type_name(ot));
         return e->type = TY_VOID; /* unreachable */
     }
 
@@ -352,7 +367,7 @@ static Type check_expr(Expr *e) {
         Type ot = check_expr(e->field.obj);
         StructDecl *sd = ot >= TY_STRUCT_BASE ? struct_type_decl(ot) : NULL;
         if (!sd) {
-            err(e->line, e->col, "cannot access field '%s' on a value of type '%s'",
+            err_node(e, "cannot access field '%s' on a value of type '%s'",
                 e->field.name, type_name(ot));
         }
         for (int i = 0; i < sd->nfields; i++) {
@@ -361,7 +376,7 @@ static Type check_expr(Expr *e) {
                 return e->type = sd->fields[i]->type;
             }
         }
-        err(e->line, e->col, "'%s' has no field '%s'", sd->name, e->field.name);
+        err_node(e, "'%s' has no field '%s'", sd->name, e->field.name);
         return e->type = TY_VOID; /* unreachable */
     }
 
@@ -370,12 +385,12 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "serve") == 0) {
             if (e->call.nargs != 1) {
-                err(e->line, e->col, "serve() expects exactly 1 argument, found %d",
+                err_node(e, "serve() expects exactly 1 argument, found %d",
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
             if (t == TY_VOID || type_is_array(t) || t >= TY_STRUCT_BASE) {
-                err(e->line, e->col, "cannot pass a value of type '%s' to serve()",
+                err_node(e, "cannot pass a value of type '%s' to serve()",
                     type_name(t));
             }
             e->call.builtin = BUILTIN_SERVE;
@@ -384,12 +399,12 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "len") == 0) {
             if (e->call.nargs != 1) {
-                err(e->line, e->col, "len() expects exactly 1 argument, found %d",
+                err_node(e, "len() expects exactly 1 argument, found %d",
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
             if (t != TY_STRING && !type_is_array(t)) {
-                err(e->call.args[0]->line, e->call.args[0]->col,
+                err_node(e->call.args[0],
                     "len() expects a 'string' or an array, found '%s'", type_name(t));
             }
             e->call.builtin = BUILTIN_LEN;
@@ -398,12 +413,12 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "str") == 0) {
             if (e->call.nargs != 1) {
-                err(e->line, e->col, "str() expects exactly 1 argument, found %d",
+                err_node(e, "str() expects exactly 1 argument, found %d",
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
             if (t != TY_INT && t != TY_BOOL && t != TY_FLOAT) {
-                err(e->call.args[0]->line, e->call.args[0]->col,
+                err_node(e->call.args[0],
                     "str() expects an 'int', a 'bool' or a 'float', found '%s'",
                     type_name(t));
             }
@@ -413,7 +428,7 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "input_line") == 0) {
             if (e->call.nargs != 0) {
-                err(e->line, e->col, "input_line() expects no arguments, found %d",
+                err_node(e, "input_line() expects no arguments, found %d",
                     e->call.nargs);
             }
             e->call.builtin = BUILTIN_INPUT;
@@ -422,12 +437,12 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "int") == 0) {
             if (e->call.nargs != 1) {
-                err(e->line, e->col, "int() expects exactly 1 argument, found %d",
+                err_node(e, "int() expects exactly 1 argument, found %d",
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
             if (t != TY_FLOAT) {
-                err(e->call.args[0]->line, e->call.args[0]->col,
+                err_node(e->call.args[0],
                     "int() expects a 'float', found '%s'", type_name(t));
             }
             e->call.builtin = BUILTIN_INT;
@@ -436,12 +451,12 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "float") == 0) {
             if (e->call.nargs != 1) {
-                err(e->line, e->col, "float() expects exactly 1 argument, found %d",
+                err_node(e, "float() expects exactly 1 argument, found %d",
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
             if (t != TY_INT) {
-                err(e->call.args[0]->line, e->call.args[0]->col,
+                err_node(e->call.args[0],
                     "float() expects an 'int', found '%s'", type_name(t));
             }
             e->call.builtin = BUILTIN_FLOAT;
@@ -450,18 +465,18 @@ static Type check_expr(Expr *e) {
 
         if (strcmp(name, "push") == 0) {
             if (e->call.nargs != 2) {
-                err(e->line, e->col, "push() expects exactly 2 arguments, found %d",
+                err_node(e, "push() expects exactly 2 arguments, found %d",
                     e->call.nargs);
             }
             Type at = check_expr(e->call.args[0]);
             if (!type_is_array(at)) {
-                err(e->call.args[0]->line, e->call.args[0]->col,
+                err_node(e->call.args[0],
                     "push() expects an array as its first argument, found '%s'",
                     type_name(at));
             }
             Type vt = check_expr(e->call.args[1]);
             if (vt != type_elem(at)) {
-                err(e->call.args[1]->line, e->call.args[1]->col,
+                err_node(e->call.args[1],
                     "push() expects a '%s' value to append, found '%s'",
                     type_name(type_elem(at)), type_name(vt));
             }
@@ -474,7 +489,7 @@ static Type check_expr(Expr *e) {
         StructDecl *sdef = struct_type_lookup(name);
         if (sdef) {
             if (e->call.nargs != sdef->nfields) {
-                err(e->line, e->col,
+                err_node(e,
                     "struct constructor '%s' expects %d argument%s, found %d",
                     name, sdef->nfields, sdef->nfields == 1 ? "" : "s",
                     e->call.nargs);
@@ -482,7 +497,7 @@ static Type check_expr(Expr *e) {
             for (int i = 0; i < e->call.nargs; i++) {
                 Type t = check_expr(e->call.args[i]);
                 if (t != sdef->fields[i]->type) {
-                    err(e->call.args[i]->line, e->call.args[i]->col,
+                    err_node(e->call.args[i],
                         "field '%s' of '%s' expects '%s', found '%s'",
                         sdef->fields[i]->name, name,
                         type_name(sdef->fields[i]->type), type_name(t));
@@ -497,23 +512,23 @@ static Type check_expr(Expr *e) {
         Func *fn = find_func(g_prog, name);
         if (!fn) {
             if (find_var(name)) {
-                err(e->line, e->col, "'%s' is a variable, not a function", name);
+                err_node(e, "'%s' is a variable, not a function", name);
             }
             if (strcmp(name, "print") == 0) {
-                err(e->line, e->col,
+                err_node(e,
                     "'print' does not exist in Duck - the output builtin is 'serve'");
             }
-            err(e->line, e->col, "undefined function '%s'", name);
+            err_node(e, "undefined function '%s'", name);
         }
 
         if (e->call.nargs != fn->nparams) {
-            err(e->line, e->col, "function '%s' expects %d argument%s, found %d", fn->name,
+            err_node(e, "function '%s' expects %d argument%s, found %d", fn->name,
                 fn->nparams, fn->nparams == 1 ? "" : "s", e->call.nargs);
         }
         for (int i = 0; i < e->call.nargs; i++) {
             Type t = check_expr(e->call.args[i]);
             if (t != fn->params[i]->type) {
-                err(e->call.args[i]->line, e->call.args[i]->col,
+                err_node(e->call.args[i],
                     "argument %d of '%s' expects '%s', found '%s'", i + 1, fn->name,
                     type_name(fn->params[i]->type), type_name(t));
             }
@@ -540,7 +555,7 @@ static void check_stmt(Stmt *s) {
         if (s->let.init->kind == EX_ARRAY && s->let.init->array.nelems == 0) {
             /* An empty literal only works with an explicit annotation. */
             if (!s->let.has_ann || !type_is_array(s->let.ann)) {
-                err(s->line, s->col,
+                err_node(s,
                     "cannot infer the type of an empty array literal - declare the type, as in 'let xs: [int] = []'");
             }
             t = s->let.ann;
@@ -549,16 +564,16 @@ static void check_stmt(Stmt *s) {
         } else {
             t = check_expr(s->let.init);
             if (t == TY_VOID) {
-                err(s->line, s->col, "cannot initialize '%s' with a value of type 'void'",
+                err_node(s, "cannot initialize '%s' with a value of type 'void'",
                     s->let.name);
             }
             if (s->let.has_ann && s->let.ann != t) {
-                err(s->line, s->col,
+                err_node(s,
                     "type mismatch: '%s' is declared as '%s' but the initializer has type '%s'",
                     s->let.name, type_name(s->let.ann), type_name(t));
             }
         }
-        Var *v = declare_var(s->let.name, t, s->line, s->col);
+        Var *v = declare_var(s->let.name, t, s->src, s->line, s->col);
         s->let.offset = v->offset;
         break;
     }
@@ -571,10 +586,10 @@ static void check_stmt(Stmt *s) {
                 check_expr(tg);
                 Type t = check_expr(s->assign.value);
                 if (t == TY_VOID) {
-                    err(s->line, s->col, "cannot assign a value of type 'void'");
+                    err_node(s, "cannot assign a value of type 'void'");
                 }
                 if (t != tg->type) {
-                    err(s->line, s->col,
+                    err_node(s,
                         "type mismatch: cannot assign '%s' to field '%s' of type '%s'",
                         type_name(t), tg->field.name, type_name(tg->type));
                 }
@@ -585,23 +600,23 @@ static void check_stmt(Stmt *s) {
             Type ot = check_expr(tg->index.obj);
             Type it = check_expr(tg->index.idx);
             if (it != TY_INT) {
-                err(tg->index.idx->line, tg->index.idx->col,
+                err_node(tg->index.idx,
                     "an index must be an 'int', found '%s'", type_name(it));
             }
             if (!type_is_array(ot)) {
                 if (ot == TY_STRING) {
-                    err(tg->line, tg->col,
+                    err_node(tg,
                         "a 'string' cannot be modified through an index - strings are immutable");
                 }
-                err(tg->line, tg->col, "cannot assign to an element of type '%s'",
+                err_node(tg, "cannot assign to an element of type '%s'",
                     type_name(ot));
             }
             Type t = check_expr(s->assign.value);
             if (t == TY_VOID) {
-                err(s->line, s->col, "cannot assign a value of type 'void'");
+                err_node(s, "cannot assign a value of type 'void'");
             }
             if (t != type_elem(ot)) {
-                err(s->line, s->col,
+                err_node(s,
                     "type mismatch: cannot assign '%s' to an element of type '%s'",
                     type_name(t), type_name(type_elem(ot)));
             }
@@ -611,14 +626,14 @@ static void check_stmt(Stmt *s) {
 
         Var *v = find_var(s->assign.name);
         if (!v) {
-            err(s->line, s->col, "undefined variable '%s'", s->assign.name);
+            err_node(s, "undefined variable '%s'", s->assign.name);
         }
         Type t = check_expr(s->assign.value);
         if (t == TY_VOID) {
-            err(s->line, s->col, "cannot assign a value of type 'void'");
+            err_node(s, "cannot assign a value of type 'void'");
         }
         if (t != v->type) {
-            err(s->line, s->col, "type mismatch: cannot assign '%s' to variable '%s' of type '%s'",
+            err_node(s, "type mismatch: cannot assign '%s' to variable '%s' of type '%s'",
                 type_name(t), s->assign.name, type_name(v->type));
         }
         s->assign.offset = v->offset;
@@ -632,7 +647,7 @@ static void check_stmt(Stmt *s) {
     case ST_IF: {
         Type t = check_expr(s->ifs.cond);
         if (t != TY_BOOL) {
-            err(s->ifs.cond->line, s->ifs.cond->col,
+            err_node(s->ifs.cond,
                 "the condition of 'if' must have type 'bool', found '%s'", type_name(t));
         }
         check_block(s->ifs.then_block);
@@ -643,7 +658,7 @@ static void check_stmt(Stmt *s) {
     case ST_WHILE: {
         Type t = check_expr(s->whiles.cond);
         if (t != TY_BOOL) {
-            err(s->whiles.cond->line, s->whiles.cond->col,
+            err_node(s->whiles.cond,
                 "the condition of 'while' must have type 'bool', found '%s'", type_name(t));
         }
         g_loops++;
@@ -655,18 +670,18 @@ static void check_stmt(Stmt *s) {
     case ST_FOR: {
         Type st = check_expr(s->fors.start);
         if (st != TY_INT) {
-            err(s->fors.start->line, s->fors.start->col,
+            err_node(s->fors.start,
                 "the start of a 'for' range must be 'int', found '%s'", type_name(st));
         }
         Type en = check_expr(s->fors.end);
         if (en != TY_INT) {
-            err(s->fors.end->line, s->fors.end->col,
+            err_node(s->fors.end,
                 "the end of a 'for' range must be 'int', found '%s'", type_name(en));
         }
         s->fors.end_offset = alloc_slot(); /* hidden slot holding the range end */
         g_loops++;
         push_scope();
-        Var *loop = declare_var(s->fors.var_name, TY_INT, s->line, s->col);
+        Var *loop = declare_var(s->fors.var_name, TY_INT, s->src, s->line, s->col);
         s->fors.var_offset = loop->offset;
         check_block(s->fors.body);
         pop_scope();
@@ -676,31 +691,31 @@ static void check_stmt(Stmt *s) {
 
     case ST_BREAK:
         if (!g_loops) {
-            err(s->line, s->col, "'break' can only be used inside a loop");
+            err_node(s, "'break' can only be used inside a loop");
         }
         break;
 
     case ST_CONTINUE:
         if (!g_loops) {
-            err(s->line, s->col, "'continue' can only be used inside a loop");
+            err_node(s, "'continue' can only be used inside a loop");
         }
         break;
 
     case ST_RETURN: {
         if (g_fn->ret == TY_VOID) {
             if (s->value) {
-                err(s->line, s->col, "function '%s' has return type 'void' but returns a value",
+                err_node(s, "function '%s' has return type 'void' but returns a value",
                     g_fn->name);
             }
             break;
         }
         if (!s->value) {
-            err(s->line, s->col, "missing return value: function '%s' returns '%s'", g_fn->name,
+            err_node(s, "missing return value: function '%s' returns '%s'", g_fn->name,
                 type_name(g_fn->ret));
         }
         Type t = check_expr(s->value);
         if (t != g_fn->ret) {
-            err(s->line, s->col, "return type mismatch: expected '%s', found '%s'",
+            err_node(s, "return type mismatch: expected '%s', found '%s'",
                 type_name(g_fn->ret), type_name(t));
         }
         break;
@@ -722,7 +737,8 @@ static void check_func(Func *f) {
 
     push_scope();
     for (int i = 0; i < f->nparams; i++) {
-        declare_var(f->params[i]->name, f->params[i]->type, f->params[i]->line, f->params[i]->col);
+        declare_var(f->params[i]->name, f->params[i]->type, f->params[i]->src,
+                    f->params[i]->line, f->params[i]->col);
     }
     check_block(f->body);
     pop_scope();
@@ -730,7 +746,7 @@ static void check_func(Func *f) {
     f->frame_size = (g_slots * 8 + 15) & ~15;
 
     if (f->ret != TY_VOID && !block_returns(f->body)) {
-        err(f->body->line, f->body->col,
+        err_at(f->src, f->body->line, f->body->col,
             "function '%s' must return a value of type '%s' on all execution paths", f->name,
             type_name(f->ret));
     }
@@ -748,19 +764,19 @@ void analyze(const SourceFile *src, Program *prog) {
         Const *c = prog->consts[i];
 
         if (c->name[0] == '_' || starts_with(c->name, "duck_")) {
-            err(c->line, c->col, "constant name '%s' is reserved", c->name);
+            err_node(c, "constant name '%s' is reserved", c->name);
         }
         if (is_builtin_name(c->name)) {
-            err(c->line, c->col, "'%s' is a builtin function and cannot be redefined",
+            err_node(c, "'%s' is a builtin function and cannot be redefined",
                 c->name);
         }
         for (int j = 0; j < i; j++) {
             if (strcmp(prog->consts[j]->name, c->name) == 0) {
-                err(c->line, c->col, "duplicate constant '%s'", c->name);
+                err_node(c, "duplicate constant '%s'", c->name);
             }
         }
         if (find_func(prog, c->name)) {
-            err(c->line, c->col, "'%s' is already declared as a function", c->name);
+            err_node(c, "'%s' is already declared as a function", c->name);
         }
         switch (c->value->kind) {
         case EX_INT:   c->value->type = TY_INT; break;
@@ -776,26 +792,26 @@ void analyze(const SourceFile *src, Program *prog) {
         StructDecl *sd = prog->structs[i];
 
         if (sd->name[0] == '_' || starts_with(sd->name, "duck_")) {
-            err(sd->line, sd->col, "struct name '%s' is reserved", sd->name);
+            err_node(sd, "struct name '%s' is reserved", sd->name);
         }
         if (is_builtin_name(sd->name)) {
-            err(sd->line, sd->col, "'%s' is a builtin function and cannot be redefined",
+            err_node(sd, "'%s' is a builtin function and cannot be redefined",
                 sd->name);
         }
         if (find_func(prog, sd->name)) {
-            err(sd->line, sd->col, "'%s' is already declared as a function", sd->name);
+            err_node(sd, "'%s' is already declared as a function", sd->name);
         }
         if (find_const(prog, sd->name)) {
-            err(sd->line, sd->col, "'%s' is already declared as a constant", sd->name);
+            err_node(sd, "'%s' is already declared as a constant", sd->name);
         }
         for (int j = 0; j < sd->nfields; j++) {
             Field *f = sd->fields[j];
             if (f->name[0] == '_' || starts_with(f->name, "duck_")) {
-                err(f->line, f->col, "field name '%s' is reserved", f->name);
+                err_node(f, "field name '%s' is reserved", f->name);
             }
             for (int k = 0; k < j; k++) {
                 if (strcmp(sd->fields[k]->name, f->name) == 0) {
-                    err(f->line, f->col, "duplicate field '%s' in struct '%s'",
+                    err_node(f, "duplicate field '%s' in struct '%s'",
                         f->name, sd->name);
                 }
             }
@@ -808,23 +824,23 @@ void analyze(const SourceFile *src, Program *prog) {
         Func *f = prog->funcs[i];
 
         if (f->name[0] == '_' || starts_with(f->name, "duck_")) {
-            err(f->line, f->col, "function name '%s' is reserved", f->name);
+            err_node(f, "function name '%s' is reserved", f->name);
         }
         if (is_builtin_name(f->name)) {
-            err(f->line, f->col, "'%s' is a builtin function and cannot be redefined", f->name);
+            err_node(f, "'%s' is a builtin function and cannot be redefined", f->name);
         }
         if (find_const(prog, f->name)) {
-            err(f->line, f->col, "'%s' is already declared as a constant", f->name);
+            err_node(f, "'%s' is already declared as a constant", f->name);
         }
         for (int j = 0; j < i; j++) {
             if (strcmp(prog->funcs[j]->name, f->name) == 0) {
-                err(f->line, f->col, "duplicate function '%s'", f->name);
+                err_node(f, "duplicate function '%s'", f->name);
             }
         }
         for (int j = 0; j < f->nparams; j++) {
             for (int k = 0; k < j; k++) {
                 if (strcmp(f->params[j]->name, f->params[k]->name) == 0) {
-                    err(f->params[j]->line, f->params[j]->col, "duplicate parameter '%s' in function '%s'",
+                    err_node(f->params[j], "duplicate parameter '%s' in function '%s'",
                         f->params[j]->name, f->name);
                 }
             }
@@ -836,7 +852,7 @@ void analyze(const SourceFile *src, Program *prog) {
         err(1, 1, "the program must define an entry point: 'fn main() -> int'");
     }
     if (entry->nparams != 0 || entry->ret != TY_INT) {
-        err(entry->line, entry->col, "the entry point must be declared as 'fn main() -> int'");
+        err_node(entry, "the entry point must be declared as 'fn main() -> int'");
     }
 
     /* Pass 2: check every body. */

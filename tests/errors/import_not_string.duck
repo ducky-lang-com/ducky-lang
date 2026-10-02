@@ -1,0 +1,5 @@
+import 5;
+
+fn main() -> int {
+    send 0;
+}

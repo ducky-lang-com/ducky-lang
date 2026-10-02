@@ -73,7 +73,7 @@ all passing.**
 | N3 | Arrays (`[int]`) with `len`, indexing, bounds | done — v0.4.0; all four element types, `[count][elems…]` heap blocks over the `brk` bump allocator, bounds-checked reads/writes (`duck: index out of bounds`, exit 127), reference semantics, `push()` copy-on-append, nested literals via hidden stack slots |
 | N4 | String operations: `+` concatenation, `len`, indexing | done — v0.4.0; `+`/`len()` in v0.3.0, `s[i]` returns a one-byte string (bounds-checked) |
 | N5 | Standard input: `input_line()` reading from stdin | done — v0.3.0; `read` syscall, one line per call, EOF → `""` |
-| N6 | Multiple source files / `import` | driver links several `.o` |
+| N6 | Multiple source files / `import` | done — v0.6.0; top-level `import "path.duck";` (new keyword), paths relative to the importing file, the whole import graph is loaded depth first and deduplicated by canonical path (diamonds and cycles load a file once), all files share one global namespace (declarations are merged before analysis, so cross-file calls/structs/constants and cross-file name collisions behave exactly like intra-file ones), every file is parsed with its own tokens so diagnostics name the file they occur in; rejected: `import` outside the top level, missing file, directory, non-string path. Compiles the merged program as one unit rather than linking several `.o` (per-file objects stay a future option) |
 | N7 | Structs and field access | done — v0.5.0; `struct Name { f: T, ... }` top-level declarations (comma-separated fields, trailing comma allowed), nominal typing via an interned type registry (`TY_STRUCT_BASE + index`, no full type refactor needed), positional constructors `Point(1, 2)` with arity/type checks, field read/write `p.x` / `p.x = v` (`.` lexes as a new `TK_DOT`), reference semantics, structs as parameters/returns/fields, free declaration order (parser pre-pass interns names), `==`/`serve`/arrays-of-structs rejected, duplicate/reserved/builtin/colliding names rejected |
 | N8 | `break` / `continue` | done — v0.3.0; innermost loop at any nesting depth |
 | N9 | Global constants (`const`) | done — v0.4.0; top-level `const NAME = <literal>;`, literals only, any declaration order, no storage (references substitute the literal), locals may shadow |
@@ -91,6 +91,12 @@ error), all passing.**
 assignment, reference semantics, structs everywhere a value can go (plus the
 rejections: comparison, `serve`, arrays of structs, name collisions). The
 suite is now **78 tests (23 runtime + 55 error), all passing.**
+
+**Update v0.6.0:** multi-file programs — `import` statements, transitive and
+deduplicated loading (diamonds and cycles), one global namespace across
+files (functions, structs, constants and `main` may live anywhere) and
+per-file diagnostics. The suite is now **85 tests (24 runtime + 61 error),
+all passing.**
 
 ## Milestone M2 — Engineering
 

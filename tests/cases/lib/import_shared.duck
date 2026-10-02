@@ -1,0 +1,7 @@
+/* Shared helpers imported by both halves of the program (diamond import). */
+const SHARED = 7;
+const TAG = "shared";
+
+fn shared_add(a: int, b: int) -> int {
+    send a + b;
+}

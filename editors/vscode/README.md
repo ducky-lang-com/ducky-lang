@@ -52,8 +52,8 @@ sh editors/vscode/install.sh --uninstall
 
 ## Manual install
 
-Copy this folder to `<extensions-dir>/duck-lang-0.1.7`, e.g.
+Copy this folder to `<extensions-dir>/duck-lang-0.1.8`, e.g.
 
 ```sh
-cp -r editors/vscode ~/.vscode-oss/extensions/duck-lang-0.1.7
+cp -r editors/vscode ~/.vscode-oss/extensions/duck-lang-0.1.8
 ```

@@ -1,0 +1,10 @@
+import "lib/import_dup_point.duck";
+
+struct Point {
+    x: int,
+    y: int,
+}
+
+fn main() -> int {
+    send 0;
+}

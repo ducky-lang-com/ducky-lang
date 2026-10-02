@@ -14,6 +14,7 @@ typedef enum {
     /* keywords */
     TK_FN,
     TK_STRUCT,
+    TK_IMPORT,
     TK_CONST,
     TK_LET,
     TK_IF,

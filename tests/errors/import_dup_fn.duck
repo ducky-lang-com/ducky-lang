@@ -1,0 +1,9 @@
+import "lib/import_dup_helper.duck";
+
+fn helper() -> int {
+    send 2;
+}
+
+fn main() -> int {
+    send 0;
+}

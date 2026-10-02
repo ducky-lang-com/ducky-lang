@@ -1,0 +1,20 @@
+// Multi-file programs: split a program across files with `import`.
+//
+//   duckc examples/imports.duck -o imports
+//
+// Import paths are relative to the file that contains the statement,
+// transitive imports are followed, and every file is loaded only once.
+// All files share one global namespace: functions, structs and constants
+// declared anywhere are visible everywhere.
+
+import "lib/imports_util.duck";
+
+fn main() -> int {
+    serve(double(21));      // from the imported file
+    serve(WIDTH);           // constant from the imported file
+
+    let n = 5;
+    serve(n * WIDTH);       // one global namespace across files
+
+    send 0;
+}

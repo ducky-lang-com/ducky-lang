@@ -1,0 +1,4 @@
+fn main() -> int {
+    import "lib/import_ok.duck";
+    send 0;
+}

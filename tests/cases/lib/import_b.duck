@@ -1,0 +1,5 @@
+import "import_shared.duck";
+
+fn helper_b() -> int {
+    send shared_add(2, SHARED);
+}

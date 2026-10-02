@@ -103,6 +103,7 @@ static Expr *new_expr(ExprKind kind, int line, int col) {
     e->kind = kind;
     e->line = line;
     e->col = col;
+    e->src = P.src;
     return e;
 }
 
@@ -112,6 +113,7 @@ static Stmt *new_stmt(StmtKind kind, int line, int col) {
     s->kind = kind;
     s->line = line;
     s->col = col;
+    s->src = P.src;
     return s;
 }
 
@@ -603,6 +605,10 @@ static Stmt *parse_stmt(void) {
         return parse_continue();
     case TK_RETURN:
         return parse_return();
+    case TK_IMPORT:
+        fatal_at(P.src, t->line, t->col,
+                 "'import' is only allowed at the top level");
+        return NULL; /* unreachable */
     case TK_IDENT:
         if (peek_at(1)->kind == TK_ASSIGN) {
             next(); /* name */
@@ -661,6 +667,7 @@ static Func *parse_func(void) {
     f->name = name->name;
     f->line = kw->line;
     f->col = kw->col;
+    f->src = P.src;
     f->ret = TY_VOID;
 
     expect(TK_LPAREN, "'(' after the function name");
@@ -677,6 +684,7 @@ static Func *parse_func(void) {
             p->type = ptype;
             p->line = pname->line;
             p->col = pname->col;
+            p->src = P.src;
             vec_push(&params, p);
         } while (accept(TK_COMMA));
     }
@@ -709,12 +717,13 @@ static Const *parse_const(void) {
     c->value = v;
     c->line = kw->line;
     c->col = kw->col;
+    c->src = P.src;
     return c;
 }
 
 /* `struct Name { field: Type, ... };` - fields are comma-separated and a
  * trailing comma is allowed. The declaration itself was already registered
- * by the pre-pass in parse(); this only fills in the fields. */
+ * by intern_struct_declarations(); this only fills in the fields. */
 static StructDecl *parse_struct(void) {
     Token *kw = expect(TK_STRUCT, "'struct' to start a struct declaration");
     Token *name = expect(TK_IDENT, "a struct name after 'struct'");
@@ -724,6 +733,7 @@ static StructDecl *parse_struct(void) {
     }
     sd->line = kw->line;
     sd->col = kw->col;
+    sd->src = P.src;
 
     expect(TK_LBRACE, "'{' to open the struct body");
 
@@ -739,6 +749,7 @@ static StructDecl *parse_struct(void) {
         f->type = ft;
         f->line = fname->line;
         f->col = fname->col;
+        f->src = P.src;
         vec_push(&fields, f);
         if (!accept(TK_COMMA)) break;
     }
@@ -749,29 +760,42 @@ static StructDecl *parse_struct(void) {
     return sd;
 }
 
-Program *parse(const SourceFile *src, Token *toks, int ntoks) {
-    P.src = src;
-    P.toks = toks;
-    P.ntoks = ntoks;
-    P.pos = 0;
-
-    /* Pre-pass: intern every struct name before parsing anything, so that a
-     * struct can be used before its declaration and a repeated name is
-     * reported at the second declaration. */
+void intern_struct_declarations(const SourceFile *src, Token *toks, int ntoks) {
+    /* Intern every struct name of this file before anything is parsed, so
+     * that a struct can be used before its declaration and a repeated name -
+     * in this file or in another file of the same program - is reported at
+     * the second declaration. The driver interns all loaded files before
+     * parsing any of them, which makes struct types visible across files. */
     for (int i = 0; i + 1 < ntoks; i++) {
         if (toks[i].kind == TK_STRUCT && toks[i + 1].kind == TK_IDENT) {
             if (struct_type_lookup(toks[i + 1].name)) {
                 fatal_at(src, toks[i + 1].line, toks[i + 1].col,
                          "duplicate struct '%s'", toks[i + 1].name);
             }
-            struct_type_intern(toks[i + 1].name);
+            StructDecl *sd = struct_type_intern(toks[i + 1].name);
+            sd->src = src;
         }
     }
+}
+
+Program *parse(const SourceFile *src, Token *toks, int ntoks) {
+    P.src = src;
+    P.toks = toks;
+    P.ntoks = ntoks;
+    P.pos = 0;
 
     Vec funcs = {0};
     Vec consts = {0};
     Vec structs = {0};
     while (!check(TK_EOF)) {
+        if (check(TK_IMPORT)) {
+            /* The driver has already loaded the imported file; parse() only
+             * consumes the statement so the declaration stream is well formed. */
+            next(); /* import */
+            expect(TK_STRING, "a file name string after 'import'");
+            expect(TK_SEMI, "';' after the import");
+            continue;
+        }
         if (check(TK_CONST)) {
             vec_push(&consts, parse_const());
             continue;
@@ -792,7 +816,8 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
             char got[64];
             describe(peek(), got, sizeof(got));
             fatal_at(src, peek()->line, peek()->col,
-                     "expected a top-level declaration ('fn', 'struct' or 'const'), found %s", got);
+                     "expected a top-level declaration ('fn', 'struct', 'const' or 'import'), "
+                     "found %s", got);
         }
         vec_push(&funcs, parse_func());
     }
@@ -804,8 +829,5 @@ Program *parse(const SourceFile *src, Token *toks, int ntoks) {
     prog->consts = vec_finish(&consts, sizeof(Const *));
     prog->nstructs = structs.len;
     prog->structs = vec_finish(&structs, sizeof(StructDecl *));
-    if (!prog->funcs) {
-        fatal_at(src, 1, 1, "expected at least one function declaration");
-    }
     return prog;
 }

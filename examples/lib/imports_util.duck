@@ -1,0 +1,11 @@
+/* Utilities shared by several files through `import`. */
+const WIDTH = 20;
+
+fn double(n: int) -> int {
+    send n * 2;
+}
+
+fn label(tag: string) -> string {
+    serve(tag);
+    send tag;
+}

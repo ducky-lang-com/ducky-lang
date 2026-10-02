@@ -1,0 +1,23 @@
+import "import_shared.duck";
+
+/* A struct declared in an imported file, constructed by the importer. */
+struct Point {
+    x: int,
+    y: int,
+}
+
+fn helper_a() -> int {
+    send shared_add(1, SHARED);
+}
+
+fn sum_point(p: Point) -> int {
+    send p.x + p.y;
+}
+
+/* Mutually recursive with pong() in the importing file. */
+fn ping(n: int) -> int {
+    if n == 0 {
+        send 0;
+    }
+    send n + pong(n - 1);
+}

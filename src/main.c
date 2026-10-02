@@ -3,12 +3,14 @@
  * Pipeline: source -> tokens -> AST -> type-checked AST -> x86-64 assembly
  * -> object file (GNU as) -> executable (system linker).
  */
+#define _XOPEN_SOURCE 700      /* realpath */
 #define _POSIX_C_SOURCE 200809L /* mkdtemp, fork, execvp, waitpid */
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -114,6 +116,154 @@ static int compile_to_assembly(const SourceFile *src, Program *prog, const char 
     return 0;
 }
 
+/* ---------- multi-file programs ------------------------------------------
+ * `import "path.duck";` pulls another source file into the program. The
+ * driver loads the whole import graph depth first, each file at most once
+ * (keyed by its canonical path, so diamonds and cycles are fine), interns
+ * the struct names of every file, parses each file with its own token
+ * stream (diagnostics then name that file) and merges all declarations into
+ * one program that is analyzed and compiled as a single unit. */
+
+typedef struct {
+    const SourceFile *src;
+    Token *toks;
+    int ntoks;
+    char *dir; /* directory containing this file */
+} Unit;
+
+static Unit *g_units;
+static int g_nunits;
+static int g_units_cap;
+
+typedef struct SeenPath {
+    const char *path;
+    struct SeenPath *next;
+} SeenPath;
+
+static SeenPath *g_seen;
+
+static int seen(const char *key) {
+    for (SeenPath *s = g_seen; s; s = s->next) {
+        if (strcmp(s->path, key) == 0) return 1;
+    }
+    return 0;
+}
+
+static void mark_seen(const char *key) {
+    SeenPath *s = arena_alloc(sizeof(*s));
+    s->path = arena_strndup(key, strlen(key));
+    s->next = g_seen;
+    g_seen = s;
+}
+
+/* Directory part of a path; "x.duck" -> ".", "lib/x.duck" -> "lib". */
+static char *dir_of(const char *path) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) return arena_strndup(".", 1);
+    if (slash == path) return arena_strndup("/", 1);
+    return arena_strndup(path, (size_t)(slash - path));
+}
+
+/* Resolve `name` against the directory of the importing file. */
+static char *join_path(const char *dir, const char *name) {
+    if (name[0] == '/') return arena_strndup(name, strlen(name));
+    size_t dl = strlen(dir), nl = strlen(name);
+    if (dl == 1 && dir[0] == '.') {
+        char *out = arena_alloc(nl + 1);
+        memcpy(out, name, nl + 1);
+        return out;
+    }
+    char *out = arena_alloc(dl + nl + 2);
+    memcpy(out, dir, dl);
+    out[dl] = '/';
+    memcpy(out + dl + 1, name, nl + 1);
+    return out;
+}
+
+/* Load `path`; `shown` is the name to print in diagnostics (the file name as
+ * written in the `import` statement, or the path itself for the root file). */
+static void load_file(const char *path, const char *shown,
+                      const SourceFile *importer, int line, int col) {
+    /* Dedupe by canonical path: a file reached twice (diamond) or a cycle
+     * back to a file already being loaded is a no-op. */
+    char *rp = realpath(path, NULL);
+    const char *key = rp ? rp : path;
+    if (seen(key)) {
+        free(rp);
+        return;
+    }
+    mark_seen(key);
+    free(rp);
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        if (importer) {
+            fatal_at(importer, line, col, "cannot open imported file '%s'", shown);
+        }
+        fatal("cannot open '%s': %s", path, strerror(errno));
+    }
+    if (S_ISDIR(st.st_mode)) {
+        if (importer) {
+            fatal_at(importer, line, col, "cannot import '%s': it is a directory", shown);
+        }
+        fatal("cannot open '%s': it is a directory", path);
+    }
+
+    const SourceFile *src = read_source(path);
+    Token *toks = NULL;
+    int ntoks = 0;
+    lex(src, &toks, &ntoks);
+
+    if (g_nunits == g_units_cap) {
+        g_units_cap = g_units_cap ? g_units_cap * 2 : 8;
+        g_units = realloc(g_units, (size_t)g_units_cap * sizeof(Unit));
+        if (!g_units) fatal("out of memory");
+    }
+    g_units[g_nunits].src = src;
+    g_units[g_nunits].toks = toks;
+    g_units[g_nunits].ntoks = ntoks;
+    char *dir = dir_of(path);
+    g_units[g_nunits].dir = dir;
+    g_nunits++;
+
+    for (int i = 0; i + 1 < ntoks; i++) {
+        if (toks[i].kind == TK_IMPORT && toks[i + 1].kind == TK_STRING) {
+            load_file(join_path(dir, toks[i + 1].sval), toks[i + 1].sval,
+                      src, toks[i + 1].line, toks[i + 1].col);
+        }
+    }
+}
+
+/* Concatenate the declarations of every loaded file into one program; the
+ * semantic checks then see a single global namespace, so duplicate names
+ * across files are rejected exactly like duplicates inside a file. */
+static Program *merge_programs(Program **progs, int n) {
+    if (n == 1) return progs[0];
+
+    int nf = 0, nc = 0, ns = 0;
+    for (int i = 0; i < n; i++) {
+        nf += progs[i]->nfuncs;
+        nc += progs[i]->nconsts;
+        ns += progs[i]->nstructs;
+    }
+
+    Program *m = arena_alloc(sizeof(Program));
+    m->nfuncs = nf;
+    m->funcs = nf ? arena_alloc((size_t)nf * sizeof(Func *)) : NULL;
+    m->nconsts = nc;
+    m->consts = nc ? arena_alloc((size_t)nc * sizeof(Const *)) : NULL;
+    m->nstructs = ns;
+    m->structs = ns ? arena_alloc((size_t)ns * sizeof(StructDecl *)) : NULL;
+
+    int fi = 0, ci = 0, si = 0;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < progs[i]->nfuncs; j++) m->funcs[fi++] = progs[i]->funcs[j];
+        for (int j = 0; j < progs[i]->nconsts; j++) m->consts[ci++] = progs[i]->consts[j];
+        for (int j = 0; j < progs[i]->nstructs; j++) m->structs[si++] = progs[i]->structs[j];
+    }
+    return m;
+}
+
 int main(int argc, char **argv) {
     Options opt = parse_args(argc, argv);
 
@@ -123,15 +273,14 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    const SourceFile *src = read_source(opt.input);
-
-    Token *toks = NULL;
-    int ntoks = 0;
-    lex(src, &toks, &ntoks);
-
     if (opt.dump_tokens) {
-        for (int i = 0; i < ntoks; i++) {
-            Token *t = &toks[i];
+        /* Dumps the token stream of the file named on the command line. */
+        const SourceFile *dsrc = read_source(opt.input);
+        Token *dtoks = NULL;
+        int dntoks = 0;
+        lex(dsrc, &dtoks, &dntoks);
+        for (int i = 0; i < dntoks; i++) {
+            Token *t = &dtoks[i];
             printf("%4d:%-3d %-12s", t->line, t->col, token_kind_name(t->kind));
             if (t->kind == TK_INT) printf(" %ld", t->ival);
             else if (t->kind == TK_FLOAT) printf(" %g", t->dval);
@@ -143,7 +292,25 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    Program *prog = parse(src, toks, ntoks);
+    load_file(opt.input, opt.input, NULL, 0, 0);
+
+    /* Intern the struct names of every file before parsing any of them, so
+     * that a struct declared in one file can be used in another. */
+    for (int i = 0; i < g_nunits; i++) {
+        intern_struct_declarations(g_units[i].src, g_units[i].toks, g_units[i].ntoks);
+    }
+
+    /* Parse each file separately - each parse reports its own file - then
+     * merge the declarations and analyze the program as a whole. */
+    Program **progs = malloc(sizeof(Program *) * (size_t)g_nunits);
+    if (!progs) fatal("out of memory");
+    for (int i = 0; i < g_nunits; i++) {
+        progs[i] = parse(g_units[i].src, g_units[i].toks, g_units[i].ntoks);
+    }
+    Program *prog = merge_programs(progs, g_nunits);
+    free(progs);
+
+    const SourceFile *src = g_units[0].src;
     analyze(src, prog);
 
     if (opt.emit_asm) {

@@ -115,6 +115,7 @@ struct Expr {
     ExprKind kind;
     int line;
     int col;
+    const struct SourceFile *src; /* file this node was parsed from */
     Type type; /* filled in by semantic analysis */
     union {
         long ival;   /* EX_INT */
@@ -180,6 +181,7 @@ struct Stmt {
     StmtKind kind;
     int line;
     int col;
+    const struct SourceFile *src; /* file this node was parsed from */
     union {
         struct {
             char *name;
@@ -232,6 +234,7 @@ typedef struct Param {
     Type type;
     int line;
     int col;
+    const struct SourceFile *src;
 } Param;
 
 /* ---------- constants ----------------------------------------------------- */
@@ -243,6 +246,7 @@ typedef struct Const {
     Expr *value;
     int line;
     int col;
+    const struct SourceFile *src;
 } Const;
 
 /* ---------- structs ------------------------------------------------------- */
@@ -254,6 +258,7 @@ typedef struct Field {
     Type type;
     int line;
     int col;
+    const struct SourceFile *src;
 } Field;
 
 struct StructDecl {
@@ -263,6 +268,7 @@ struct StructDecl {
     Type type;  /* TY_STRUCT_BASE + registry index */
     int line;
     int col;
+    const struct SourceFile *src;
 };
 
 struct Func {
@@ -273,6 +279,7 @@ struct Func {
     Block *body;
     int line;
     int col;
+    const struct SourceFile *src;
     int frame_size; /* bytes of stack for parameters + locals, set by sema */
 };
 

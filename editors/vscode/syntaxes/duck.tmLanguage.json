@@ -119,7 +119,7 @@
       "patterns": [
         {
           "name": "keyword.control.duck",
-          "match": "\\b(fn|struct|const|let|if|else|while|for|in|send|break|continue)\\b"
+          "match": "\\b(fn|struct|import|const|let|if|else|while|for|in|send|break|continue)\\b"
         }
       ]
     },

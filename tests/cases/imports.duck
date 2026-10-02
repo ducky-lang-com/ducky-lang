@@ -1,0 +1,31 @@
+/* Multi-file program: import pulls files in, everything shares one global
+ * namespace (functions, structs and constants are visible across files). */
+import "lib/import_a.duck";
+import "lib/import_b.duck";
+import "lib/import_shared.duck";
+
+fn pong(n: int) -> int {
+    if n == 0 {
+        send 100;
+    }
+    send n + ping(n - 1);
+}
+
+fn main() -> int {
+    /* Direct calls into imported files. */
+    serve(helper_a());
+    serve(helper_b());
+
+    /* Constant and helper defined in a transitively imported file. */
+    serve(shared_add(3, SHARED));
+    serve(TAG);
+
+    /* Struct declared in lib/import_a.duck, built here. */
+    let p = Point(30, 12);
+    serve(sum_point(p));
+
+    /* Mutual recursion across files: ping (imported) <-> pong (here). */
+    serve(ping(3));
+
+    send 0;
+}

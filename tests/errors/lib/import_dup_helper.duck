@@ -1,0 +1,3 @@
+fn helper() -> int {
+    send 1;
+}
