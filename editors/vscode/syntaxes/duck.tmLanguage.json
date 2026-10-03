@@ -128,6 +128,10 @@
         {
           "name": "storage.type.duck",
           "match": "\\b(int|float|bool|string)\\b"
+        },
+        {
+          "name": "storage.type.duck",
+          "match": "\\btensor(?=\\s*\\[)"
         }
       ]
     },
@@ -143,7 +147,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.duck",
-          "match": "\\b(serve|len|str|input_line|push|scan_int|scan_float|scan_int_line|scan_float_line)(?=\\s*\\()"
+          "match": "\\b(serve|len|str|input_line|push|scan_int|scan_float|scan_int_line|scan_float_line|tensor|zeros|ones|rand|seed|shape|matmul|dot|relu|sigmoid|tanh|gelu|softmax|sum|mean|max|min|argmax|mse|cross_entropy)(?=\\s*\\()"
         }
       ]
     },

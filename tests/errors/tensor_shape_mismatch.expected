@@ -1,0 +1,1 @@
+operator '+' requires tensors of the same shape, found 'tensor[2, 3]' and 'tensor[3, 2]'

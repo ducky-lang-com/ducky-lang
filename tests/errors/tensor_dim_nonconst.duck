@@ -1,0 +1,6 @@
+fn main() -> int {
+    let n = 3;
+    let t: tensor[n] = zeros([n]);
+    serve(t);
+    send 0;
+}

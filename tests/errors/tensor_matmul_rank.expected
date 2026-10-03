@@ -1,0 +1,1 @@
+matmul() needs a rank-2 tensor on the left and a rank-2 or rank-1 tensor on the right

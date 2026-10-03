@@ -113,13 +113,19 @@ void fatal_at(const SourceFile *f, int line, int col, const char *fmt, ...) {
  * Struct names are interned by a parser pre-pass before any declaration is
  * parsed, so a struct may be used before (or after) its declaration. Each
  * interned struct owns the Type value TY_STRUCT_BASE + index, which is what
- * makes the typing nominal: only a declaration can produce that integer. */
+ * makes the typing nominal: only a declaration can produce that integer.
+ * The range stops at TY_TENSOR_BASE so struct and tensor kinds never share
+ * an integer. */
 
 static StructDecl **g_structs;
 static int g_nstructs;
 static int g_structs_cap;
 
 StructDecl *struct_type_intern(const char *name) {
+    if (g_nstructs == TY_TENSOR_BASE - TY_STRUCT_BASE) {
+        fatal("too many distinct struct types (limit is %d)",
+              TY_TENSOR_BASE - TY_STRUCT_BASE);
+    }
     if (g_nstructs == g_structs_cap) {
         g_structs_cap = g_structs_cap ? g_structs_cap * 2 : 8;
         StructDecl **ns = realloc(g_structs,
@@ -151,6 +157,115 @@ StructDecl *struct_type_decl(Type t) {
 const char *struct_type_name(Type t) {
     StructDecl *sd = struct_type_decl(t);
     return sd ? sd->name : "?";
+}
+
+/* ---------- tensor shape registry ------------------------------------------
+ * `tensor[2, 3]` and `tensor[3, 2]` are different types, and both differ
+ * from `tensor[6]`. Each distinct shape is interned once and owns the Type
+ * value TY_TENSOR_BASE + index, so shape equality is integer equality and
+ * every diagnostic can print the canonical spelling kept in ts->name. */
+
+static TensorShape **g_tensors;
+static int g_ntensors;
+static int g_tensors_cap;
+
+TensorShape *tensor_type_intern(const int *dims, int rank) {
+    for (int i = 0; i < g_ntensors; i++) {
+        TensorShape *ts = g_tensors[i];
+        if (ts->rank != rank) continue;
+        int same = 1;
+        for (int d = 0; d < rank; d++) {
+            if (ts->dims[d] != dims[d]) { same = 0; break; }
+        }
+        if (same) return ts;
+    }
+
+    if (g_ntensors == g_tensors_cap) {
+        g_tensors_cap = g_tensors_cap ? g_tensors_cap * 2 : 8;
+        TensorShape **ns = realloc(g_tensors,
+                                   (size_t)g_tensors_cap * sizeof(TensorShape *));
+        if (!ns) fatal("out of memory");
+        g_tensors = ns;
+    }
+
+    TensorShape *ts = arena_alloc(sizeof(TensorShape));
+    memset(ts, 0, sizeof(*ts));
+    ts->type = TY_TENSOR_BASE + g_ntensors;
+    ts->rank = rank;
+    for (int i = 0; i < rank; i++) ts->dims[i] = dims[i];
+
+    /* The element count is known here and forever: check it once so that
+     * code generation can size blocks without ever re-deriving it. */
+    long n = 1;
+    for (int i = 0; i < rank; i++) {
+        if (n > 1000000000L / dims[i]) {
+            fatal("tensor shape is too large: [%d] holds more than "
+                  "1000000000 elements", dims[i]);
+        }
+        n *= dims[i];
+    }
+    ts->nelems = n;
+
+    int off = snprintf(ts->name, sizeof(ts->name), "tensor[");
+    for (int i = 0; i < rank && off < (int)sizeof(ts->name); i++) {
+        off += snprintf(ts->name + off, sizeof(ts->name) - (size_t)off,
+                        "%s%d", i ? ", " : "", dims[i]);
+    }
+    if (off < (int)sizeof(ts->name)) {
+        snprintf(ts->name + off, sizeof(ts->name) - (size_t)off, "]");
+    }
+
+    g_tensors[g_ntensors++] = ts;
+    return ts;
+}
+
+TensorShape *tensor_type_decl(Type t) {
+    int idx = t - TY_TENSOR_BASE;
+    if (idx < 0 || idx >= g_ntensors) return NULL;
+    return g_tensors[idx];
+}
+
+const char *tensor_type_name(Type t) {
+    TensorShape *ts = tensor_type_decl(t);
+    return ts ? ts->name : "tensor[?]";
+}
+
+/* ---------- compile-time integer constants ---------------------------------
+ * A tensor dimension must be known while the type is parsed, but `const`
+ * declarations may appear anywhere in the program (and in any file of it).
+ * The parser therefore runs a token pre-pass over every file first - the
+ * same pre-pass that interns struct names - and records each
+ * `const NAME = <int literal>;` here. Semantic analysis still owns the real
+ * validation (duplicates, reserved names, non-integer initializers); this
+ * table only answers "what integer is NAME" while parsing a tensor type. */
+
+typedef struct CtInt {
+    const char *name;
+    long value;
+    struct CtInt *next;
+} CtInt;
+
+static CtInt *g_ct_ints;
+
+void ct_int_add(const char *name, long value) {
+    for (CtInt *c = g_ct_ints; c; c = c->next) {
+        if (strcmp(c->name, name) == 0) return; /* first declaration wins */
+    }
+    CtInt *c = arena_alloc(sizeof(CtInt));
+    c->name = arena_strndup(name, strlen(name));
+    c->value = value;
+    c->next = g_ct_ints;
+    g_ct_ints = c;
+}
+
+int ct_int_find(const char *name, long *out) {
+    for (CtInt *c = g_ct_ints; c; c = c->next) {
+        if (strcmp(c->name, name) == 0) {
+            *out = c->value;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ---------- AST helper names -------------------------------------------- */

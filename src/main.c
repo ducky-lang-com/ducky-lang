@@ -294,9 +294,11 @@ int main(int argc, char **argv) {
 
     load_file(opt.input, opt.input, NULL, 0, 0);
 
-    /* Intern the struct names of every file before parsing any of them, so
-     * that a struct declared in one file can be used in another. */
+    /* Intern the struct names and the compile-time constants of every file
+     * before parsing any of them, so that a struct or a tensor dimension
+     * declared in one file can be used in another. */
     for (int i = 0; i < g_nunits; i++) {
+        collect_const_ints(g_units[i].src, g_units[i].toks, g_units[i].ntoks);
         intern_struct_declarations(g_units[i].src, g_units[i].toks, g_units[i].ntoks);
     }
 

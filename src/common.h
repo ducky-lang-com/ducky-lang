@@ -32,4 +32,11 @@ const SourceFile *read_source(const char *path);
 void fatal(const char *fmt, ...);
 void fatal_at(const SourceFile *f, int line, int col, const char *fmt, ...);
 
+/* ---------- compile-time integer constants -------------------------------
+ * Filled in by the parser pre-pass (see common.c) so that a tensor
+ * dimension such as `tensor[HIDDEN, 10]` can be resolved while the type is
+ * parsed, no matter where in the program the `const` was declared. */
+void ct_int_add(const char *name, long value);
+int ct_int_find(const char *name, long *out);
+
 #endif /* DUCK_COMMON_H */

@@ -59,7 +59,7 @@ static struct {
     {"break", TK_BREAK},   {"continue", TK_CONTINUE}, {"true", TK_TRUE},
     {"false", TK_FALSE},
     {"int", TK_KW_INT},    {"float", TK_KW_FLOAT},{"bool", TK_KW_BOOL},
-    {"string", TK_KW_STRING},
+    {"string", TK_KW_STRING}, {"tensor", TK_KW_TENSOR},
 };
 
 static void skip_trivia(Lexer *lx) {
@@ -403,6 +403,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_KW_FLOAT:  return "float";
     case TK_KW_BOOL:   return "bool";
     case TK_KW_STRING: return "string";
+    case TK_KW_TENSOR: return "tensor";
     case TK_LPAREN:    return "(";
     case TK_RPAREN:    return ")";
     case TK_LBRACKET:  return "[";

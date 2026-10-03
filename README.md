@@ -34,10 +34,23 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
-v0.7.0 — **renamed to Ducky**: project, language, compiler (`duckc` →
-`duckyc`), runtime prefix (`ducky_*`), diagnostics (`ducky:`), repository
-(`ducky-lang-com/ducky-lang`) and extension (`ducky-lang`); the source
-extension stays `.duck`. The release also adds the `scan_*` builtins
+v0.8.0 — **the AI core**: a `tensor` type whose **shape lives in the type**
+(`tensor[2, 3]` and `tensor[3, 2]` are different types), so a wrong shape is a
+compile error with a caret instead of a surprise at run time. Element-wise
+`+ - * /`, indexing that drops a dimension per subscript, `matmul` (including
+matrix × vector), `dot`, the activations `relu` / `sigmoid` / `tanh` /
+`gelu` / `softmax`, the reductions `sum` / `mean` / `max` / `min` /
+`argmax`, and the losses `mse` / `cross_entropy`. It runs on an `exp` and a
+`log` this compiler emits itself — 1 ulp against libm across the whole range —
+plus a seeded generator, so pure programs still link **no libc and no libm**.
+The tensor runtime is emitted only when a program actually uses tensors.
+See [USAGE.md](USAGE.md) for the walkthrough and [ROADMAP.md](ROADMAP.md) for
+what comes next: automatic differentiation, model files and the network layer.
+
+**Before that, v0.7.0 — renamed to Ducky**: project, language, compiler
+(`duckc` → `duckyc`), runtime prefix (`ducky_*`), diagnostics (`ducky:`),
+repository (`ducky-lang-com/ducky-lang`) and extension (`ducky-lang`); the
+source extension stays `.duck`. The release also adds the `scan_*` builtins
 (`scan_int`, `scan_float`, `scan_int_line`, `scan_float_line` parse a string
 or a line from stdin C-style and never raise at run time) and **`extern fn
 ...;` declarations**: `extern fn printf(fmt: string, ...) -> int;` lets a
@@ -61,6 +74,20 @@ comes next.
 
 ## Features
 
+* **Tensors with compile-time shapes**: `tensor[2, 3]` carries its shape in
+  the type, so `a + b` on mismatched shapes, a wrong constructor length or a
+  dimension that is not a compile-time constant are all compile errors.
+  Element-wise `+ - * /` (tensor/tensor and tensor/scalar in both orders),
+  indexing that drops one dimension per subscript, `len()` (outermost dim) and
+  `shape()`; `matmul` for rank 2 × (rank 2 or rank 1) and `dot` for vectors.
+  Byte-identical to a `[float]` at run time — no shape bookkeeping, one
+  contiguous block, bounds-checked on every index.
+* **Neural-net primitives**: `relu`, `sigmoid`, `tanh`, `gelu`, `softmax`
+  (per row, max-subtracted so large logits stay finite), the reductions
+  `sum` / `mean` / `max` / `min` / `argmax`, and the losses `mse` /
+  `cross_entropy` (logsumexp, overflow-proof). Backed by an own `exp`/`log`
+  accurate to ~1 ulp, so the whole thing still links no libm — and the tensor
+  runtime is emitted only for programs that use tensors.
 * **Static typing** with the built-in types `int` (64-bit), `float` (f64),
   `bool`, `string` and fixed-length arrays (`[int]`, `[float]`, `[bool]`,
   `[string]`), plus user-defined `struct` records. No implicit conversions;
@@ -193,7 +220,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckyc
-make test     # runs the test suite (99 tests)
+make test     # runs the test suite (108 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
@@ -260,6 +287,10 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
    array bounds checks, `push` and a small `brk`-based allocator — all
    implemented with raw `write`, `read`, `brk` and `exit` syscalls. Programs
    with `extern` declarations additionally flush stdio before exiting.
+   Programs that use tensors additionally get the **tensor runtime** — the
+   element-wise kernels, `matmul`, `dot`, the activations and reductions,
+   the losses, the tensor printer, a seeded generator and an own `exp`/`log` —
+   emitted only when the program actually uses tensors.
 
 ## Project layout
 
@@ -271,7 +302,8 @@ ducky-lang/
 ├── editors/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
-├── SPEC.md            language specification v0.7.0
+├── USAGE.md           day-to-day usage guide with examples
+├── SPEC.md            language specification v0.8.0
 ├── ROADMAP.md         requirements: delivered and planned
 ├── src/
 │   ├── common.{h,c}   arena allocator, file loading, diagnostics
@@ -282,7 +314,8 @@ ducky-lang/
 │   ├── codegen.{h,c}  x86-64 backend + runtime emission
 │   ├── version.h      version constants
 │   └── main.c         duckyc command line driver (as + ld/cc invocation)
-├── examples/          hello, fibonacci, fizzbuzz, averages, structs, imports
+├── examples/          hello, fibonacci, fizzbuzz, averages, structs, imports,
+│                      scan, tensors
 └── tests/
     ├── run_tests.sh   test harness
     ├── cases/         programs with expected stdout (and exit status)
@@ -291,9 +324,15 @@ ducky-lang/
 
 ## Documentation
 
-* [SPEC.md](SPEC.md) — the language: lexical structure, types, statements,
-  expressions, precedence table, full grammar, reserved names, diagnostics.
-* [ROADMAP.md](ROADMAP.md) — initial requirements and the plan forward.
+* [USAGE.md](USAGE.md) — how to use the language day to day: install,
+  compile, the tour of every feature with runnable snippets, and a
+  walkthrough of the tensor / neural-net builtins.
+* [SPEC.md](SPEC.md) — the language: lexical structure, types (including
+  §3.3 Tensors), statements, expressions, precedence table, the full builtin
+  table, full grammar, reserved names, diagnostics.
+* [ROADMAP.md](ROADMAP.md) — requirements per milestone and the plan forward
+  (v0.8.0's tensor core, then automatic differentiation, model files and the
+  network layer).
 
 ## License
 

@@ -1,0 +1,1 @@
+type mismatch: 't' is declared as 'tensor[2]' but the initializer has type 'tensor[2, 3]'

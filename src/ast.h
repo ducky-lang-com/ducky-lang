@@ -2,10 +2,17 @@
 #ifndef DUCK_AST_H
 #define DUCK_AST_H
 
+#include <stddef.h> /* NULL, used by the type helpers below */
+
 /* ---------- types ------------------------------------------------------ */
-/* Scalar and array types are small integers. Struct types are interned:
- * every `struct` declaration gets TY_STRUCT_BASE + index into the registry
- * (common.c), so nominal typing needs no other refactor. */
+/* Scalar and array types are small integers. Struct and tensor types are
+ * interned: every `struct` declaration gets TY_STRUCT_BASE + index and every
+ * distinct tensor shape gets TY_TENSOR_BASE + index into its own registry
+ * (common.c), so nominal typing and static tensor shapes both need no other
+ * refactor. The two ranges never overlap: struct kinds are capped at
+ * TY_TENSOR_BASE - TY_STRUCT_BASE by struct_type_intern(). */
+#define DUCKY_MAX_RANK 8 /* dimensions of the widest tensor type */
+
 enum {
     TY_INT,     /* 64-bit signed integer  */
     TY_FLOAT,   /* 64-bit IEEE-754 float  */
@@ -16,7 +23,8 @@ enum {
     TY_ARR_BOOL,    /* [bool]   fixed-length array of bool   */
     TY_ARR_STRING,  /* [string] fixed-length array of string */
     TY_VOID,    /* no value (only for calls) */
-    TY_STRUCT_BASE = 64 /* struct types live at TY_STRUCT_BASE + index */
+    TY_STRUCT_BASE = 64,      /* struct types: TY_STRUCT_BASE + index      */
+    TY_TENSOR_BASE = 4160     /* tensor types: TY_TENSOR_BASE + index      */
 };
 
 typedef int Type;
@@ -24,14 +32,59 @@ typedef int Type;
 /* A struct declaration; opaque here, defined below. */
 typedef struct StructDecl StructDecl;
 
-/* Struct type registry (common.c). */
+/* An interned tensor shape: the *type* `tensor[d0, d1, ...]`. Tensor types
+ * carry their dimensions at compile time, which is what lets shape mistakes
+ * such as matmul(a, b) with a mismatched inner dimension be reported by the
+ * compiler instead of at run time. */
+typedef struct TensorShape {
+    Type type;                 /* TY_TENSOR_BASE + registry index */
+    int rank;
+    int dims[DUCKY_MAX_RANK];
+    long nelems;               /* product of dims, checked at interning */
+    char name[128];            /* "tensor[2, 3]" - what diagnostics show */
+} TensorShape;
+
+/* Struct and tensor type registries (common.c). */
 StructDecl *struct_type_intern(const char *name);
 StructDecl *struct_type_lookup(const char *name);
 StructDecl *struct_type_decl(Type t);
 const char *struct_type_name(Type t);
 
+TensorShape *tensor_type_intern(const int *dims, int rank);
+TensorShape *tensor_type_decl(Type t);
+const char *tensor_type_name(Type t);
+
+static inline int type_is_struct(Type t) {
+    return t >= TY_STRUCT_BASE && t < TY_TENSOR_BASE;
+}
+
+static inline int type_is_tensor(Type t) {
+    return t >= TY_TENSOR_BASE;
+}
+
+static inline TensorShape *type_shape(Type t) {
+    return type_is_tensor(t) ? tensor_type_decl(t) : NULL;
+}
+
+/* Rank, dimension i and element count of a tensor type. */
+static inline int tensor_rank(Type t) {
+    TensorShape *ts = type_shape(t);
+    return ts ? ts->rank : 0;
+}
+
+static inline int tensor_dim(Type t, int i) {
+    TensorShape *ts = type_shape(t);
+    return (ts && i >= 0 && i < ts->rank) ? ts->dims[i] : 0;
+}
+
+static inline long tensor_nelems(Type t) {
+    TensorShape *ts = type_shape(t);
+    return ts ? ts->nelems : 0;
+}
+
 static inline const char *type_name(Type t) {
-    if (t >= TY_STRUCT_BASE) return struct_type_name(t);
+    if (type_is_tensor(t)) return tensor_type_name(t);
+    if (type_is_struct(t)) return struct_type_name(t);
     switch (t) {
     case TY_INT:        return "int";
     case TY_FLOAT:      return "float";
@@ -108,7 +161,37 @@ typedef enum {
     BUILTIN_SCAN_INT,      /* scan_int(string) -> int     (like C's atoi)   */
     BUILTIN_SCAN_FLOAT,    /* scan_float(string) -> float (like C's atof)   */
     BUILTIN_SCAN_INT_LINE, /* scan_int_line() -> int  (reads stdin)         */
-    BUILTIN_SCAN_FLOAT_LINE /* scan_float_line() -> float (reads stdin)     */
+    BUILTIN_SCAN_FLOAT_LINE,/* scan_float_line() -> float (reads stdin)     */
+
+    /* tensor construction and shape builtins (v0.8.0) */
+    BUILTIN_TENSOR,  /* tensor([d0,...], [float]) -> tensor[...] */
+    BUILTIN_ZEROS,   /* zeros([d0,...])  -> tensor[...]          */
+    BUILTIN_ONES,    /* ones([d0,...])   -> tensor[...]          */
+    BUILTIN_RAND,    /* rand([d0,...])   -> tensor[...]          */
+    BUILTIN_SEED,    /* seed(int)        -> void                 */
+    BUILTIN_SHAPE,   /* shape(tensor)    -> [int]                */
+
+    /* linear algebra */
+    BUILTIN_MATMUL,  /* matmul(MxK, KxN) -> MxN  (K checked at compile time) */
+    BUILTIN_DOT,     /* dot([K], [K])    -> float                         */
+
+    /* activations: every one preserves the shape of its argument */
+    BUILTIN_RELU,
+    BUILTIN_SIGMOID,
+    BUILTIN_TANH,
+    BUILTIN_GELU,
+    BUILTIN_SOFTMAX, /* normalizes along the last axis */
+
+    /* reductions: a tensor becomes a scalar */
+    BUILTIN_SUM,
+    BUILTIN_MEAN,
+    BUILTIN_MAX,
+    BUILTIN_MIN,
+    BUILTIN_ARGMAX,  /* -> int, the flattened index of the largest element */
+
+    /* losses */
+    BUILTIN_MSE,           /* mse(pred, target) -> float, same shape */
+    BUILTIN_CROSS_ENTROPY  /* cross_entropy(logits[N], class) -> float */
 } Builtin;
 
 typedef struct Func Func;

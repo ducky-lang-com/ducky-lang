@@ -84,6 +84,19 @@ all passing.**
 | N14 | `str()` builtin (`int`/`bool` → `string`) | done — v0.3.0; extended to `float` in v0.4.0 |
 | N15 | Input parsing builtins: `scan_int` / `scan_float` (+ `_line`) | done — v0.7.0; `scan_int(s)` parses a `string` C `atoi`-style (whitespace, optional sign, decimal only, stops at the first invalid char; no digits → `0`, overflow clamps to ±INT64_MAX) and `scan_float(s)` parses C `atof`-style (15 significant digits, `.` and `e` exponents, `inf`/`nan` accepted case-insensitively, overflow → ±inf, underflow → `0.0`, trailing junk ignored, no digits → `0.0`); `scan_int_line()` / `scan_float_line()` read one line from stdin first; parse failure is never a runtime error |
 | N16 | `extern fn ...;` declarations, link against the C library | done — v0.7.0; `extern fn printf(fmt: string, ...) -> int;` ends with `;` and has no body, signature limited to `int`/`float`/`bool`/`string` (plus no return type), variadic `...` with a minimum-arity check and scalar/string extra arguments, System V-correct marshalling (int/bool/string → `rdi…r9` in order, `float` → `xmm0…xmm7` in order, register exhaustion falls back to the stack in argument order, `%al` = vector-register count for variadics), float returns arrive in `xmm0` → `%rax`; the driver links with `cc -nostartfiles -lm` only when the program declares `extern` (pure programs keep the raw `ld` link and stay freestanding) and `_start` flushes stdio before the exit syscall; rejected: `extern fn main`, array/struct in the signature |
+| N17 | The `tensor` type, with the **shape in the type** | done — v0.8.0; `tensor[2, 3]` is a distinct type from `tensor[3, 2]`, dims are compile-time integers (literal or top-level `const`), positive, ≤ 1e9, rank ≤ 8; layout identical to `[float]` (`[count][elems…]`, row-major); `tensor(shape, data)` constructor with both counts checked at compile time |
+| N18 | Tensor indexing and assignment | done — v0.8.0; each subscript drops a dimension from the type, bounds-checked; a slice taken as a value is a copy, an assignment target navigates without copying; whole-row assignment `t[0] = row` |
+| N19 | Tensor arithmetic `+ - * /`, unary `-` | done — v0.8.0; element-wise, same shape required, either side may be a `float`; `==` rejected with a diagnostic that names the operators that work |
+| N20 | `len(t)` and `shape(t)` | done — v0.8.0; `len` is the outermost dimension, `shape` returns `[int]` so `len(shape(t))` is the rank |
+| N21 | Linear algebra: `matmul`, `dot` | done — v0.8.0; `matmul` is rank 2 × (rank 2 or rank 1) so a matrix–vector layer is a single call; `dot` for two vectors |
+| N22 | Activations: `relu`, `sigmoid`, `tanh`, `gelu`, `softmax` | done — v0.8.0; `softmax` works per row and subtracts the row maximum first, so logits far beyond `exp()`'s range stay finite |
+| N23 | Reductions: `sum`, `mean`, `max`, `min`, `argmax` | done — v0.8.0 |
+| N24 | Losses: `mse`, `cross_entropy` | done — v0.8.0; cross entropy is `m + log(Σeˣʲ−ᵐ) − xᵢ` (logsumexp), overflow-proof |
+| N25 | Own `exp` / `log` in the runtime (no libm) | done — v0.8.0; argument reduction with a split `ln2`, 20-term Taylor / 18-term odd series; measured against libm over the whole range: 2.2e-16 relative for `exp`, 3.6e-16 for `log`, with `nan`/`inf`/signed zero passed through |
+| N26 | Seeded uniform generator: `rand([d, …])`, `seed(n)` | done — v0.8.0; splitmix64, reproducible across runs and across machines |
+| N27 | Tensor parameters and return types | done — v0.8.0; `fn scale(t: tensor[2, 3], k: float) -> tensor[2, 3]` |
+| N28 | Tensor runtime is **emitted only when used** | done — v0.8.0; an AST walk sets the flag, so a program that never mentions tensors links none of it (15 KB vs 21 KB binary) |
+| N29 | Builtin names stay user-definable | done — v0.8.0; only `serve`/`len`/`str`/`input_line`/`float`/`int`/`push`/`scan_*`/`tensor` are reserved. A user `sum`, `rand`, `max` or `min` shadows the builtin of the same name, so programs written before v0.8.0 keep compiling unchanged |
 
 **Update v0.4.0:** floats, arrays (with string indexing), `const`, `push()`
 and the numeric conversions. The suite is then **59 tests (22 runtime + 37
@@ -106,6 +119,15 @@ compiler `duckyc`, runtime prefix `ducky_`, messages `ducky:`, repository
 stays `.duck`), plus the four `scan_*` builtins (N15) and `extern`
 declarations with C-library linking (N16). The suite is now **99 tests
 (26 runtime + 73 error), all passing.**
+
+**Update v0.8.0 — the AI core (N17–N29):** the `tensor` type with
+compile-time shapes, indexing and assignment, element-wise arithmetic,
+`matmul` / `dot`, the activations, the reductions and the two losses, backed
+by an own `exp`/`log` and a seeded generator — all emitted only for programs
+that use tensors, so pure programs stay freestanding and small. Builtin names
+that programs have always been free to define (`sum`, `rand`, `max`, `min`,
+`shape`, …) remain definable: a user definition shadows the builtin. The
+suite is now **108 tests (28 runtime + 80 error), all passing.**
 
 ## Milestone M2 — Engineering
 
@@ -149,3 +171,61 @@ With B1–B8 the same compiler that builds programs for Linux today could
 build a small teaching/hobby kernel (xv6 / Rust-tutorial league): a real OS
 that boots, though deliberately not a production one — no drivers,
 networking or MMU policy.
+
+---
+
+## Milestone M5 — The network layer: from tensors to a language for AI
+
+v0.8.0 shipped the **numerical core**: a tensor type whose shape lives in the
+type, the linear-algebra and activation primitives, and the two losses — all
+computed by code this repository emits, with no libm, no libc and no runtime
+to install. The next milestone turns that core into something that can
+actually learn and actually talk to a model.
+
+The guiding constraint is unchanged: **pure Ducky programs stay
+freestanding.** Everything here is implemented either in generated x86-64 or
+in Ducky itself, so a program that uses it still produces a static ELF that
+runs on a bare machine.
+
+### M5a — Learning
+
+| # | Requirement | Notes |
+|---|---|---|
+| Y1 | Reverse-mode automatic differentiation over tensors | gradients as tensors, tape or symbolic; `grad(f, x)` or an explicit `backward()` |
+| Y2 | Optimizers: SGD (with momentum), Adam | apply a gradient in place, learning rate as an argument |
+| Y3 | A `Layer`/`Module` vocabulary: dense layers, chains, forward pass | structs plus functions, no new syntax if it can be avoided |
+| Y4 | Training loop on a small dataset, with a printed loss curve | the proof that Y1–Y3 work end to end |
+| Y5 | Deterministic data: `rand` reshaping helpers, shuffling, train/test split | builds on `seed(n)` |
+| Y6 | Batched tensors (`tensor[b, n]`) and a `matmul` that stays cache-friendly | current `matmul` is a simple triple loop |
+
+### M5b — Model files
+
+| # | Requirement | Notes |
+|---|---|---|
+| Z1 | File I/O builtins: `open` / `read` / `write` / `close` / `exists` | raw syscalls for pure programs; needed to load weights at all |
+| Z2 | Reading binary data into a tensor (`tensor_from_bytes`, endianness stated) | the layout must be documented, not guessed |
+| Z3 | Saving and loading a trained model in a Ducky-defined format | header + shapes + float32 payloads |
+| Z4 | Quantization: `float32` ↔ `int8`/`float16` weights and a quantized `matmul` | smaller files, faster inference on narrow vectors |
+| Z5 | `half` / `bfloat16` as types, or as an explicit view over `float` | decide by need, not by symmetry |
+
+### M5c — Talking to a model
+
+| # | Requirement | Notes |
+|---|---|---|
+| W1 | Sockets over raw syscalls: `tcp_connect`, `read`, `write` | pure-Ducky networking, no libc |
+| W2 | An HTTP/1.1 client: headers, `Content-Length`, chunked responses | enough for a JSON API |
+| W3 | JSON: a parser (and a small writer) in Ducky | structured output from an API and structured input to one |
+| W4 | A tokenizer: byte-pair encoding with a vocabulary file | the bridge between `string` and `tensor` |
+| W5 | Transformer blocks in Ducky: embeddings, layer norm, multi-head attention, the residual stream | the same primitives v0.8.0 shipped, composed |
+| W6 | A demo that runs a real prompt through a hosted LLM endpoint and prints the reply | the headline of the release |
+| W7 | An offline demo: a small character-level model trained locally (Y4) and sampled (Z3) | proves the whole path works without a network |
+
+**Why this order.** M5a needs no new I/O and can be validated purely against
+numbers, so it comes first. M5b is the bridge — a model that cannot be loaded
+is a model that cannot be used. M5c is the visible payoff, and it is the only
+part that assumes a network at all; W7 exists so that the milestone is
+complete even with the network unplugged.
+
+**Deliberately out of scope:** GPU/NEON backends (the target is a
+general-purpose CPU with SSE2), training anything larger than a laptop can
+hold, and a serving stack. Those follow, if at all, in a later milestone.

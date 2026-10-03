@@ -53,14 +53,23 @@ static int starts_with(const char *s, const char *prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
-static int is_builtin_name(const char *name) {
+/* Names that no declaration may take. These are the ones the language itself
+ * depends on: shadowing `len` or `push` would silently break every array in
+ * the program, so they are rejected outright.
+ *
+ * The rest of the builtin surface - `sum`, `max`, `rand`, `shape`, the
+ * activations - is deliberately absent. They are ordinary words that programs
+ * have always been free to use as their own, and a user definition of one
+ * takes precedence over the builtin at every call site (see check_expr). */
+static int is_reserved_builtin_name(const char *name) {
     return strcmp(name, "serve") == 0 || strcmp(name, "len") == 0 ||
            strcmp(name, "str") == 0 || strcmp(name, "input_line") == 0 ||
            strcmp(name, "int") == 0 || strcmp(name, "float") == 0 ||
            strcmp(name, "push") == 0 || strcmp(name, "scan_int") == 0 ||
            strcmp(name, "scan_float") == 0 ||
            strcmp(name, "scan_int_line") == 0 ||
-           strcmp(name, "scan_float_line") == 0;
+           strcmp(name, "scan_float_line") == 0 ||
+           strcmp(name, "tensor") == 0;
 }
 
 static Func *find_func(Program *prog, const char *name) {
@@ -155,6 +164,81 @@ static int block_returns(Block *b) {
 
 /* ---------- expressions ---------------------------------------------------- */
 
+static Type check_expr(Expr *e);
+
+/* The type obtained by indexing one dimension away from a tensor:
+ * `tensor[2, 3][i]` has type `tensor[3]`, and `tensor[3][i]` is a plain
+ * `float`. Both the reader and the assignment statement need this, so it
+ * lives in one place. */
+static Type tensor_tail(Type t) {
+    TensorShape *ts = type_shape(t);
+    if (!ts) return TY_VOID;
+    if (ts->rank == 1) return TY_FLOAT;
+    return tensor_type_intern(ts->dims + 1, ts->rank - 1)->type;
+}
+
+/* Type-check the shape argument of `tensor(...)`, `zeros(...)`, `ones(...)`
+ * and `rand(...)`: an array literal whose elements are all compile-time
+ * integers. The elements arrive already substituted when they name a `const`
+ * (check_expr replaces constant references with their literal), which is
+ * what makes `zeros([HIDDEN, 10])` work. */
+static Type check_shape_arg(Expr *e) {
+    if (e->kind == EX_ARRAY && e->array.nelems == 0) {
+        err_node(e, "a tensor shape needs at least one dimension, as in [2, 3]");
+    }
+    if (e->kind == EX_ARRAY && e->array.nelems > DUCKY_MAX_RANK) {
+        err_node(e, "a tensor shape may have at most %d dimensions, found %d",
+                 DUCKY_MAX_RANK, e->array.nelems);
+    }
+
+    Type t = check_expr(e);
+    if (e->kind != EX_ARRAY || !type_is_array(t)) {
+        err_node(e, "the shape must be an array literal of integers, as in [2, 3]");
+    }
+    if (t != TY_ARR_INT) {
+        err_node(e, "tensor dimensions must be integers, found '%s'", type_name(t));
+    }
+
+    int dims[DUCKY_MAX_RANK];
+    for (int i = 0; i < e->array.nelems; i++) {
+        Expr *el = e->array.elems[i];
+        if (el->kind != EX_INT) {
+            err_node(el,
+                "tensor dimension %d must be a compile-time integer constant - a literal "
+                "or a top-level 'const NAME = <int>;'", i + 1);
+        }
+        if (el->ival < 1) {
+            err_node(el, "tensor dimensions must be positive, found %ld", el->ival);
+        }
+        dims[i] = (int)el->ival;
+    }
+    return tensor_type_intern(dims, e->array.nelems)->type;
+}
+
+/* Tensor arithmetic: '+', '-' and '*' accept two tensors of the *same*
+ * shape, or one tensor and one float (broadcast over every element). No
+ * other combination is allowed, so every shape mismatch is a compile error
+ * instead of a run-time surprise. */
+static Type check_tensor_arith(Expr *e, Type l, Type r, BinaryOp op) {
+    if (type_is_tensor(l) && type_is_tensor(r)) {
+        if (l != r) {
+            err_node(e,
+                "operator '%s' requires tensors of the same shape, found '%s' and '%s'",
+                binary_op_name(op), type_name(l), type_name(r));
+        }
+        return l;
+    }
+    Type ts = type_is_tensor(l) ? l : r;
+    Type scalar = type_is_tensor(l) ? r : l;
+    if (scalar != TY_FLOAT) {
+        err_node(e,
+            "operator '%s' cannot combine '%s' and '%s' - a tensor combines with a "
+            "tensor of the same shape or with a 'float'",
+            binary_op_name(op), type_name(l), type_name(r));
+    }
+    return ts;
+}
+
 static Type check_expr(Expr *e) {
     switch (e->kind) {
     case EX_INT:
@@ -201,8 +285,8 @@ static Type check_expr(Expr *e) {
     case EX_UNARY: {
         Type t = check_expr(e->unary.operand);
         if (e->unary.op == UOP_NEG) {
-            if (t != TY_INT && t != TY_FLOAT) {
-                err_node(e, "unary '-' requires 'int' or 'float', found '%s'",
+            if (t != TY_INT && t != TY_FLOAT && !type_is_tensor(t)) {
+                err_node(e, "unary '-' requires 'int', 'float' or a tensor, found '%s'",
                     type_name(t));
             }
             return e->type = t;
@@ -223,6 +307,22 @@ static Type check_expr(Expr *e) {
         Type l = check_expr(e->binary.lhs);
         Type r = check_expr(e->binary.rhs);
         BinaryOp op = e->binary.op;
+
+        /* Tensors take part in exactly four operators. Everything else -
+         * comparisons, the remainder and the bitwise operators - stops here
+         * so the message names tensors instead of falling through to the
+         * integer rules below. */
+        int arithmetic = op == BOP_ADD || op == BOP_SUB ||
+                         op == BOP_MUL || op == BOP_DIV;
+        if ((type_is_tensor(l) || type_is_tensor(r)) && !arithmetic) {
+            err_node(e,
+                "operator '%s' is not defined for tensors ('%s' and '%s') - "
+                "tensors support '+', '-', '*', '/' and unary '-'",
+                binary_op_name(op), type_name(l), type_name(r));
+        }
+        if (arithmetic && (type_is_tensor(l) || type_is_tensor(r))) {
+            return e->type = check_tensor_arith(e, l, r, op);
+        }
 
         switch (op) {
         case BOP_AND:
@@ -319,7 +419,7 @@ static Type check_expr(Expr *e) {
                     "arrays cannot be compared with '%s' - compare elements instead",
                     binary_op_name(op));
             }
-            if (l >= TY_STRUCT_BASE) {
+            if (type_is_struct(l)) {
                 err_node(e,
                     "struct values cannot be compared with '%s' - compare fields instead",
                     binary_op_name(op));
@@ -346,7 +446,7 @@ static Type check_expr(Expr *e) {
         if (et == TY_VOID) {
             err_node(e, "cannot store a value of type 'void' in an array");
         }
-        if (type_is_array(et) || et >= TY_STRUCT_BASE) {
+        if (type_is_array(et) || type_is_struct(et) || type_is_tensor(et)) {
             err_node(e, "arrays of '%s' are not supported yet", type_name(et));
         }
         e->array.slot = alloc_slot();
@@ -360,6 +460,7 @@ static Type check_expr(Expr *e) {
             err_node(e->index.idx,
                 "an index must be an 'int', found '%s'", type_name(it));
         }
+        if (type_is_tensor(ot)) return e->type = tensor_tail(ot);
         if (type_is_array(ot)) return e->type = type_elem(ot);
         if (ot == TY_STRING) return e->type = TY_STRING;
         err_node(e, "cannot index a value of type '%s'", type_name(ot));
@@ -386,13 +487,25 @@ static Type check_expr(Expr *e) {
     case EX_CALL: {
         const char *name = e->call.name;
 
+        /* A user definition of the same name wins over the builtin. This is
+         * what keeps `sum`, `rand`, `max` and `min` usable as ordinary
+         * function names: they became builtins in v0.8.0, but programs have
+         * always been allowed to declare their own, and reserving them now
+         * would break every one of those programs on upgrade.
+         *
+         * The dispatch below is a chain of tests on `name`, so pointing it at
+         * the empty string skips the whole chain in one place - nothing
+         * matches "", and every path that uses `name` afterwards is only
+         * reached when nothing matched. */
+        if (g_prog && find_func(g_prog, name)) name = "";
+
         if (strcmp(name, "serve") == 0) {
             if (e->call.nargs != 1) {
                 err_node(e, "serve() expects exactly 1 argument, found %d",
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t == TY_VOID || type_is_array(t) || t >= TY_STRUCT_BASE) {
+            if (t == TY_VOID || type_is_array(t) || type_is_struct(t)) {
                 err_node(e, "cannot pass a value of type '%s' to serve()",
                     type_name(t));
             }
@@ -406,10 +519,13 @@ static Type check_expr(Expr *e) {
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t != TY_STRING && !type_is_array(t)) {
+            if (t != TY_STRING && !type_is_array(t) && !type_is_tensor(t)) {
                 err_node(e->call.args[0],
-                    "len() expects a 'string' or an array, found '%s'", type_name(t));
+                    "len() expects a 'string', an array or a tensor, found '%s'",
+                    type_name(t));
             }
+            /* For a tensor this is the outermost dimension, so
+             * `for i in 0..len(t) { t[i] ... }` walks exactly one index. */
             e->call.builtin = BUILTIN_LEN;
             return e->type = TY_INT;
         }
@@ -533,6 +649,244 @@ static Type check_expr(Expr *e) {
             return e->type = at;
         }
 
+        /* ---------- tensor builtins ------------------------------------
+         * A tensor's shape is part of its type, so every one of these
+         * resolves a compile-time shape here. Whatever the compiler knows at
+         * this point is what it can reject before the program ever runs: a
+         * matmul whose inner dimensions differ, a data literal that does not
+         * fill its shape, an argument of the wrong rank. */
+
+        if (strcmp(name, "tensor") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e,
+                    "tensor() expects 2 arguments - the shape and the data - found %d",
+                    e->call.nargs);
+            }
+            Type shape = check_shape_arg(e->call.args[0]);
+            long n = tensor_nelems(shape);
+            Expr *data = e->call.args[1];
+            if (data->kind == EX_ARRAY && data->array.nelems == 0) {
+                err_node(data, "the data literal is empty, but %s holds %ld elements",
+                         type_name(shape), n);
+            }
+            Type dt = check_expr(data);
+            if (dt != TY_ARR_FLOAT) {
+                err_node(data, "tensor() expects the data to be a '[float]', found '%s'",
+                         type_name(dt));
+            }
+            if (data->kind == EX_ARRAY && (long)data->array.nelems != n) {
+                err_node(data, "%s holds %ld elements but the data literal has %d",
+                         type_name(shape), n, data->array.nelems);
+            }
+            e->call.builtin = BUILTIN_TENSOR;
+            return e->type = shape;
+        }
+
+        if (strcmp(name, "zeros") == 0 || strcmp(name, "ones") == 0 ||
+            strcmp(name, "rand") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "%s() expects 1 argument - the shape - found %d",
+                         name, e->call.nargs);
+            }
+            Type shape = check_shape_arg(e->call.args[0]);
+            e->call.builtin = strcmp(name, "zeros") == 0  ? BUILTIN_ZEROS
+                              : strcmp(name, "ones") == 0 ? BUILTIN_ONES
+                                                          : BUILTIN_RAND;
+            return e->type = shape;
+        }
+
+        if (strcmp(name, "seed") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "seed() expects exactly 1 argument, found %d",
+                         e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (t != TY_INT) {
+                err_node(e->call.args[0], "seed() expects an 'int', found '%s'",
+                         type_name(t));
+            }
+            e->call.builtin = BUILTIN_SEED;
+            return e->type = TY_VOID;
+        }
+
+        if (strcmp(name, "shape") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "shape() expects exactly 1 argument, found %d",
+                         e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (!type_is_tensor(t)) {
+                err_node(e->call.args[0], "shape() expects a tensor, found '%s'",
+                         type_name(t));
+            }
+            e->call.builtin = BUILTIN_SHAPE;
+            return e->type = TY_ARR_INT;
+        }
+
+        if (strcmp(name, "matmul") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e, "matmul() expects exactly 2 arguments, found %d",
+                         e->call.nargs);
+            }
+            Type a = check_expr(e->call.args[0]);
+            Type b = check_expr(e->call.args[1]);
+            if (!type_is_tensor(a)) {
+                err_node(e->call.args[0],
+                    "matmul() expects a tensor as its first argument, found '%s'",
+                    type_name(a));
+            }
+            if (!type_is_tensor(b)) {
+                err_node(e->call.args[1],
+                    "matmul() expects a tensor as its second argument, found '%s'",
+                    type_name(b));
+            }
+            int ra = tensor_rank(a), rb = tensor_rank(b);
+            if (ra != 2 || (rb != 2 && rb != 1)) {
+                err_node(e,
+                    "matmul() needs a rank-2 tensor on the left and a rank-2 "
+                    "or rank-1 tensor on the right, found '%s' and '%s'",
+                    type_name(a), type_name(b));
+            }
+            int ka = tensor_dim(a, 1), kb = tensor_dim(b, 0);
+            if (ka != kb) {
+                err_node(e,
+                    "matmul cannot multiply '%s' by '%s': the inner dimensions "
+                    "differ (%d and %d)",
+                    type_name(a), type_name(b), ka, kb);
+            }
+            /* A rank-1 right operand is a single column, so the product is a
+             * vector: the layout of tensor[k] is byte-identical to that of
+             * tensor[k, 1] and the same kernel runs with n = 1. */
+            int out[2] = { tensor_dim(a, 0), rb == 1 ? 1 : tensor_dim(b, 1) };
+            e->call.builtin = BUILTIN_MATMUL;
+            return e->type = tensor_type_intern(out, rb == 1 ? 1 : 2)->type;
+        }
+
+        if (strcmp(name, "dot") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e, "dot() expects exactly 2 arguments, found %d",
+                         e->call.nargs);
+            }
+            Type a = check_expr(e->call.args[0]);
+            Type b = check_expr(e->call.args[1]);
+            if (!type_is_tensor(a)) {
+                err_node(e->call.args[0],
+                    "dot() expects a tensor as its first argument, found '%s'",
+                    type_name(a));
+            }
+            if (!type_is_tensor(b)) {
+                err_node(e->call.args[1],
+                    "dot() expects a tensor as its second argument, found '%s'",
+                    type_name(b));
+            }
+            if (tensor_rank(a) != 1 || tensor_rank(b) != 1) {
+                err_node(e, "dot() needs two vectors, found '%s' and '%s' - "
+                            "use matmul() for matrices",
+                         type_name(a), type_name(b));
+            }
+            if (a != b) {
+                err_node(e, "dot() needs two vectors of the same length, found "
+                            "'%s' and '%s'",
+                         type_name(a), type_name(b));
+            }
+            e->call.builtin = BUILTIN_DOT;
+            return e->type = TY_FLOAT;
+        }
+
+        /* Activations: shape in, same shape out. */
+        if (strcmp(name, "relu") == 0 || strcmp(name, "sigmoid") == 0 ||
+            strcmp(name, "tanh") == 0 || strcmp(name, "gelu") == 0 ||
+            strcmp(name, "softmax") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "%s() expects exactly 1 argument, found %d",
+                         name, e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (!type_is_tensor(t)) {
+                err_node(e->call.args[0], "%s() expects a tensor, found '%s'",
+                         name, type_name(t));
+            }
+            e->call.builtin = strcmp(name, "relu") == 0      ? BUILTIN_RELU
+                              : strcmp(name, "sigmoid") == 0 ? BUILTIN_SIGMOID
+                              : strcmp(name, "tanh") == 0    ? BUILTIN_TANH
+                              : strcmp(name, "gelu") == 0    ? BUILTIN_GELU
+                                                            : BUILTIN_SOFTMAX;
+            return e->type = t;
+        }
+
+        /* Reductions: a tensor becomes a scalar. */
+        if (strcmp(name, "sum") == 0 || strcmp(name, "mean") == 0 ||
+            strcmp(name, "max") == 0 || strcmp(name, "min") == 0 ||
+            strcmp(name, "argmax") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "%s() expects exactly 1 argument, found %d",
+                         name, e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (!type_is_tensor(t)) {
+                err_node(e->call.args[0], "%s() expects a tensor, found '%s'",
+                         name, type_name(t));
+            }
+            e->call.builtin = strcmp(name, "sum") == 0      ? BUILTIN_SUM
+                              : strcmp(name, "mean") == 0   ? BUILTIN_MEAN
+                              : strcmp(name, "max") == 0    ? BUILTIN_MAX
+                              : strcmp(name, "min") == 0    ? BUILTIN_MIN
+                                                            : BUILTIN_ARGMAX;
+            return e->type = strcmp(name, "argmax") == 0 ? TY_INT : TY_FLOAT;
+        }
+
+        if (strcmp(name, "mse") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e, "mse() expects exactly 2 arguments, found %d",
+                         e->call.nargs);
+            }
+            Type p = check_expr(e->call.args[0]);
+            Type t = check_expr(e->call.args[1]);
+            if (!type_is_tensor(p)) {
+                err_node(e->call.args[0],
+                    "mse() expects a tensor as its first argument, found '%s'",
+                    type_name(p));
+            }
+            if (!type_is_tensor(t)) {
+                err_node(e->call.args[1],
+                    "mse() expects a tensor as its second argument, found '%s'",
+                    type_name(t));
+            }
+            if (p != t) {
+                err_node(e, "mse() needs two tensors of the same shape, found "
+                            "'%s' and '%s'",
+                         type_name(p), type_name(t));
+            }
+            e->call.builtin = BUILTIN_MSE;
+            return e->type = TY_FLOAT;
+        }
+
+        if (strcmp(name, "cross_entropy") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e, "cross_entropy() expects exactly 2 arguments, found %d",
+                         e->call.nargs);
+            }
+            Type l = check_expr(e->call.args[0]);
+            Type t = check_expr(e->call.args[1]);
+            if (!type_is_tensor(l)) {
+                err_node(e->call.args[0],
+                    "cross_entropy() expects a tensor of logits, found '%s'",
+                    type_name(l));
+            }
+            if (tensor_rank(l) != 1) {
+                err_node(e->call.args[0],
+                    "cross_entropy() expects a rank-1 tensor of logits, found '%s'",
+                    type_name(l));
+            }
+            if (t != TY_INT) {
+                err_node(e->call.args[1],
+                    "cross_entropy() expects the class index as an 'int', found '%s'",
+                    type_name(t));
+            }
+            e->call.builtin = BUILTIN_CROSS_ENTROPY;
+            return e->type = TY_FLOAT;
+        }
+
         /* A struct constructor: `Point(1, 2)` resolves against the registry
          * (interned by the parser pre-pass), not the function table. */
         StructDecl *sdef = struct_type_lookup(name);
@@ -557,8 +911,10 @@ static Type check_expr(Expr *e) {
             return e->type = sdef->type;
         }
 
-        /* Resolved against the global function table collected in analyze(). */
-        Func *fn = find_func(g_prog, name);
+        /* Resolved against the global function table collected in analyze().
+         * The real name is used here, not the possibly-empty `name`, so that
+         * a shadowing definition is what this finds. */
+        Func *fn = find_func(g_prog, e->call.name);
         if (!fn) {
             if (find_var(name)) {
                 err_node(e, "'%s' is a variable, not a function", name);
@@ -664,7 +1020,7 @@ static void check_stmt(Stmt *s) {
                 err_node(tg->index.idx,
                     "an index must be an 'int', found '%s'", type_name(it));
             }
-            if (!type_is_array(ot)) {
+            if (!type_is_array(ot) && !type_is_tensor(ot)) {
                 if (ot == TY_STRING) {
                     err_node(tg,
                         "a 'string' cannot be modified through an index - strings are immutable");
@@ -672,16 +1028,21 @@ static void check_stmt(Stmt *s) {
                 err_node(tg, "cannot assign to an element of type '%s'",
                     type_name(ot));
             }
+            /* The target's own type decides what may be stored: a float when
+             * the index reaches the innermost dimension, another tensor when
+             * it only drops one. `t[i][j] = 5.0` and `t[i] = row` are both
+             * checked here, against the shape the compiler already knows. */
+            Type target = type_is_tensor(ot) ? tensor_tail(ot) : type_elem(ot);
             Type t = check_expr(s->assign.value);
             if (t == TY_VOID) {
                 err_node(s, "cannot assign a value of type 'void'");
             }
-            if (t != type_elem(ot)) {
+            if (t != target) {
                 err_node(s,
                     "type mismatch: cannot assign '%s' to an element of type '%s'",
-                    type_name(t), type_name(type_elem(ot)));
+                    type_name(t), type_name(target));
             }
-            tg->type = type_elem(ot);
+            tg->type = target;
             break;
         }
 
@@ -829,7 +1190,7 @@ void analyze(const SourceFile *src, Program *prog) {
         if (c->name[0] == '_' || starts_with(c->name, "ducky_")) {
             err_node(c, "constant name '%s' is reserved", c->name);
         }
-        if (is_builtin_name(c->name)) {
+        if (is_reserved_builtin_name(c->name)) {
             err_node(c, "'%s' is a builtin function and cannot be redefined",
                 c->name);
         }
@@ -857,7 +1218,7 @@ void analyze(const SourceFile *src, Program *prog) {
         if (sd->name[0] == '_' || starts_with(sd->name, "ducky_")) {
             err_node(sd, "struct name '%s' is reserved", sd->name);
         }
-        if (is_builtin_name(sd->name)) {
+        if (is_reserved_builtin_name(sd->name)) {
             err_node(sd, "'%s' is a builtin function and cannot be redefined",
                 sd->name);
         }
@@ -889,7 +1250,7 @@ void analyze(const SourceFile *src, Program *prog) {
         if (f->name[0] == '_' || starts_with(f->name, "ducky_")) {
             err_node(f, "function name '%s' is reserved", f->name);
         }
-        if (is_builtin_name(f->name)) {
+        if (is_reserved_builtin_name(f->name)) {
             err_node(f, "'%s' is a builtin function and cannot be redefined", f->name);
         }
         if (find_const(prog, f->name)) {

@@ -1,0 +1,6 @@
+fn main() -> int {
+    let a: tensor[3] = zeros([3]);
+    let b: tensor[3] = zeros([3]);
+    serve(matmul(a, b));
+    send 0;
+}

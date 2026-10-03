@@ -125,6 +125,51 @@ static Stmt *parse_stmt(void);
 
 /* ---------- expressions -------------------------------------------------- */
 
+/* Read one dimension of a tensor type: a positive integer literal, or the
+ * name of a top-level `const` initialized with one. The values come from the
+ * token pre-pass (collect_const_ints), which runs over every file before any
+ * of them is parsed - that is what makes `tensor[HIDDEN, 10]` work no matter
+ * where HIDDEN is declared. */
+static int parse_dim(void) {
+    Token *t = peek();
+
+    if (t->kind == TK_MINUS) {
+        Token *minus = next();
+        char got[64];
+        describe(peek(), got, sizeof(got));
+        fatal_at(P.src, minus->line, minus->col,
+                 "tensor dimensions must be positive integers, found '-%s'", got);
+    }
+
+    long value;
+    if (t->kind == TK_INT) {
+        next();
+        value = t->ival;
+    } else if (t->kind == TK_IDENT) {
+        next();
+        if (!ct_int_find(t->name, &value)) {
+            fatal_at(P.src, t->line, t->col,
+                     "tensor dimension '%s' must be a compile-time integer constant "
+                     "- a literal or a top-level 'const NAME = <int>;'", t->name);
+        }
+    } else {
+        char got[64];
+        describe(t, got, sizeof(got));
+        fatal_at(P.src, t->line, t->col,
+                 "expected an integer tensor dimension, found %s", got);
+    }
+
+    if (value < 1) {
+        fatal_at(P.src, t->line, t->col,
+                 "tensor dimensions must be positive, found %ld", value);
+    }
+    if (value > 1000000000L) {
+        fatal_at(P.src, t->line, t->col,
+                 "tensor dimension %ld is out of range (at most 1000000000)", value);
+    }
+    return (int)value;
+}
+
 static Type parse_type(void) {
     Token *t = peek();
     switch (t->kind) {
@@ -132,12 +177,29 @@ static Type parse_type(void) {
     case TK_KW_FLOAT:  next(); return TY_FLOAT;
     case TK_KW_BOOL:   next(); return TY_BOOL;
     case TK_KW_STRING: next(); return TY_STRING;
+    case TK_KW_TENSOR: {
+        next(); /* tensor */
+        Token *lb = expect(TK_LBRACKET, "'[' after 'tensor' to open the shape");
+        int dims[DUCKY_MAX_RANK];
+        int rank = 0;
+        for (;;) {
+            if (rank == DUCKY_MAX_RANK) {
+                fatal_at(P.src, lb->line, lb->col,
+                         "a tensor type may have at most %d dimensions", DUCKY_MAX_RANK);
+            }
+            dims[rank++] = parse_dim();
+            if (!accept(TK_COMMA)) break;
+        }
+        expect(TK_RBRACKET, "']' to close the tensor shape");
+        return tensor_type_intern(dims, rank)->type;
+    }
     case TK_IDENT: {
         next();
         StructDecl *sd = struct_type_lookup(t->name);
         if (!sd) {
             fatal_at(P.src, t->line, t->col,
-                     "unknown type '%s' - expected int, float, bool, string, [T] or a struct name",
+                     "unknown type '%s' - expected int, float, bool, string, tensor[...], "
+                     "[T] or a struct name",
                      t->name);
         }
         return sd->type;
@@ -157,7 +219,8 @@ static Type parse_type(void) {
         char got[64];
         describe(t, got, sizeof(got));
         fatal_at(P.src, t->line, t->col,
-                 "expected a type (int, float, bool, string, [T] or a struct name), found %s", got);
+                 "expected a type (int, float, bool, string, tensor[...], [T] or a "
+                 "struct name), found %s", got);
     }
     }
     return TY_VOID; /* unreachable */
@@ -193,18 +256,29 @@ static Expr *parse_primary(void) {
         return e;
     }
     case TK_KW_INT:
-    case TK_KW_FLOAT: {
-        /* `int(x)` and `float(x)` are conversion builtins whose names are
-         * also type keywords. They become ordinary calls when followed by
-         * '(' (parse_postfix turns the variable into a call). */
+    case TK_KW_FLOAT:
+    case TK_KW_TENSOR: {
+        /* `int(x)`, `float(x)` and `tensor(shape, data)` are conversion and
+         * construction builtins whose names are also type keywords. They
+         * become ordinary calls when followed by '(' (parse_postfix turns
+         * the variable into a call). */
         if (peek_at(1)->kind != TK_LPAREN) {
-            const char *kw = t->kind == TK_KW_INT ? "int" : "float";
+            const char *kw = t->kind == TK_KW_INT       ? "int"
+                             : t->kind == TK_KW_FLOAT   ? "float"
+                                                        : "tensor";
+            if (t->kind == TK_KW_TENSOR) {
+                fatal_at(P.src, t->line, t->col,
+                         "'tensor' is a type name - build a value with "
+                         "tensor(shape, data), zeros(shape), ones(shape) or rand(shape)");
+            }
             fatal_at(P.src, t->line, t->col,
                      "'%s' is a type name - use %s(x) to convert a value", kw, kw);
         }
         next();
         Expr *e = new_expr(EX_VAR, t->line, t->col);
-        e->var.name = t->kind == TK_KW_INT ? "int" : "float";
+        e->var.name = t->kind == TK_KW_INT       ? "int"
+                      : t->kind == TK_KW_FLOAT   ? "float"
+                                                 : "tensor";
         return e;
     }
     case TK_IDENT: {
@@ -825,6 +899,25 @@ void intern_struct_declarations(const SourceFile *src, Token *toks, int ntoks) {
             StructDecl *sd = struct_type_intern(toks[i + 1].name);
             sd->src = src;
         }
+    }
+}
+
+void collect_const_ints(const SourceFile *src, Token *toks, int ntoks) {
+    /* A tensor dimension has to be a number while the *type* is parsed, but
+     * a `const` may be declared after the type that names it, or in another
+     * file of the same program. This pre-pass therefore runs over every file
+     * first and records each `const NAME = <int literal>;`. It deliberately
+     * accepts nothing else - a float constant, a duplicate name or a broken
+     * declaration is left for semantic analysis to report properly, at the
+     * place it actually occurs. */
+    (void)src;
+    for (int i = 0; i + 4 < ntoks; i++) {
+        if (toks[i].kind != TK_CONST) continue;
+        if (toks[i + 1].kind != TK_IDENT) continue;
+        if (toks[i + 2].kind != TK_ASSIGN) continue;
+        if (toks[i + 3].kind != TK_INT) continue;
+        if (toks[i + 4].kind != TK_SEMI) continue;
+        ct_int_add(toks[i + 1].name, toks[i + 3].ival);
     }
 }
 

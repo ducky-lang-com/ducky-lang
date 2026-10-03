@@ -1,0 +1,6 @@
+fn main() -> int {
+    let a: tensor[3] = zeros([3]);
+    let b: tensor[4] = zeros([4]);
+    serve(dot(a, b));
+    send 0;
+}

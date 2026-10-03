@@ -1,0 +1,64 @@
+// tensor.duck - compile-time shapes, indexing, arithmetic and linear algebra.
+fn main() -> int {
+    let a: tensor[2, 3] = tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    serve(a);
+    serve(len(a));            // the outermost dimension
+    serve(len(shape(a)));     // the rank
+    serve(shape(a)[0]);
+    serve(shape(a)[1]);
+
+    // Indexing drops one dimension per subscript; a whole row is a value.
+    serve(a[0]);
+    serve(a[1][2]);
+    serve(a[1]);
+
+    // Assignment walks to the element without copying the tensor.
+    a[1][0] = 99.0;
+    serve(a);
+
+    // A slice taken as a value is a copy: writing to it leaves a alone.
+    let r: tensor[3] = a[0];
+    r[2] = -5.0;
+    serve(r);
+    serve(a);
+
+    // Assigning a row writes it straight into the destination.
+    let s: tensor[2, 3] = zeros([2, 3]);
+    s[0] = a[1];
+    serve(s);
+    serve(ones([2, 2]));
+
+    // Element-wise arithmetic: tensor/tensor and both orders of tensor/scalar.
+    let x: tensor[3] = tensor([3], [1.0, 2.0, 4.0]);
+    let y: tensor[3] = tensor([3], [8.0, 4.0, 2.0]);
+    serve(x + y);
+    serve(x - y);
+    serve(x * y);
+    serve(x / y);
+    serve(x + 1.0);
+    serve(x - 1.0);
+    serve(x * 2.0);
+    serve(x / 4.0);
+    serve(1.0 - x);
+    serve(8.0 / x);
+    serve(-x);
+
+    // Linear algebra.
+    let m: tensor[2, 3] = tensor([2, 3], [1.0, 0.0, -1.0, 2.0, 3.0, -2.0]);
+    let n: tensor[3, 2] = tensor([3, 2], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    serve(matmul(m, n));
+    serve(matmul(n, m));
+    // A rank-1 right operand is a column, so this is matrix x vector.
+    let v3: tensor[3] = tensor([3], [1.0, 0.0, -1.0]);
+    serve(matmul(m, v3));
+    serve(dot(x, y));
+    serve(dot(m[0], m[1]));
+
+    // A function can take and return tensors; the shape travels in the type.
+    serve(scale(m, 2.0));
+    send 0;
+}
+
+fn scale(t: tensor[2, 3], k: float) -> tensor[2, 3] {
+    send t * k;
+}

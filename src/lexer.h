@@ -32,6 +32,7 @@ typedef enum {
     TK_KW_FLOAT,
     TK_KW_BOOL,
     TK_KW_STRING,
+    TK_KW_TENSOR,
 
     /* punctuation */
     TK_LPAREN,

@@ -1,0 +1,4 @@
+fn main() -> int {
+    let t: tensor[2] = tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    send 0;
+}

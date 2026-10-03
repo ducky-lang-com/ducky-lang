@@ -1,0 +1,49 @@
+// tensor_nn.duck - activations, softmax, reductions and the loss functions.
+fn main() -> int {
+    // Activations, element by element.
+    let v: tensor[5] = tensor([5], [-2.0, -0.5, 0.0, 0.5, 2.0]);
+    serve(relu(v));
+    serve(sigmoid(v));
+    serve(tanh(v));
+    serve(gelu(v));
+
+    // softmax works per row and subtracts the row maximum first, so inputs
+    // far beyond exp()'s range still come out as a proper distribution.
+    serve(softmax(v));
+    let big: tensor[3] = tensor([3], [1000.0, 1000.0, 1000.0]);
+    serve(softmax(big));
+    let two: tensor[2, 3] = tensor([2, 3], [1.0, 2.0, 3.0, 1.0, 0.0, -1.0]);
+    serve(softmax(two));
+    serve(sum(two));
+    serve(mean(two));
+
+    // Reductions over the whole tensor.
+    let w: tensor[2, 4] = tensor([2, 4], [3.0, 1.0, 2.0, 3.0, -4.0, 0.5, 5.0, -1.0]);
+    serve(max(w));
+    serve(min(w));
+    serve(argmax(w));
+    serve(sum(w));
+    serve(mean(w));
+
+    // Losses.
+    let t3: tensor[3] = tensor([3], [1.0, 2.0, 3.0]);
+    let t3b: tensor[3] = tensor([3], [1.5, 2.0, 2.0]);
+    serve(mse(t3, t3));
+    serve(mse(t3, t3b));
+    let flat: tensor[3] = tensor([3], [0.0, 0.0, 0.0]);
+    serve(cross_entropy(flat, 0));
+    let even: tensor[2] = tensor([2], [1.0, 1.0]);
+    serve(cross_entropy(even, 0));
+    let skewed: tensor[2] = tensor([2], [2.0, 0.0]);
+    serve(cross_entropy(skewed, 1));
+
+    // The generator is seeded: the same seed repeats, a new one does not.
+    seed(1);
+    serve(rand([4]));
+    serve(rand([3]));
+    seed(1);
+    serve(rand([4]));
+    seed(2);
+    serve(rand([4]));
+    send 0;
+}

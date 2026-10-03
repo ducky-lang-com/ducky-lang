@@ -1,0 +1,46 @@
+// tensors.duck - the tensor type: compile-time shapes, indexing and the
+// neural-net primitives. Shapes live in the type, so a mistake in one is a
+// compile error rather than a surprise at runtime.
+
+fn main() -> int {
+    // The constructor takes the shape and a flat [float] of matching length.
+    let w: tensor[2, 3] = tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let x: tensor[3] = tensor([3], [1.0, 0.0, -1.0]);
+
+    serve(w);
+    serve(x);
+    serve(len(w));          // 2 - the outermost dimension
+    serve(shape(w)[1]);     // 3 - indexing the shape gives the dimensions
+
+    // A layer: matrix x vector, then bias, then relu.
+    let h: tensor[2] = matmul(w, x);
+    serve(h);
+    serve(h + tensor([2], [1.0, 1.0]));
+    serve(relu(h));
+
+    // softmax normalises a row into a probability distribution. It subtracts
+    // the row maximum first, so even very large logits stay finite.
+    serve(softmax(tensor([3], [2.0, 1.0, 0.1])));
+    serve(softmax(tensor([3], [1000.0, 1000.0, 1000.0])));
+
+    // Losses.
+    let pred: tensor[3] = tensor([3], [0.5, 0.25, 0.25]);
+    let want: tensor[3] = tensor([3], [1.0, 0.0, 0.0]);
+    serve(mse(pred, want));
+    serve(cross_entropy(tensor([3], [2.0, 1.0, 0.1]), 0));
+
+    // Element-wise arithmetic and indexing.
+    let a: tensor[3] = tensor([3], [1.0, 2.0, 4.0]);
+    let b: tensor[3] = tensor([3], [8.0, 4.0, 2.0]);
+    serve(a + b);
+    serve(a * b);
+    serve(a / b);
+    serve(a[2]);
+    serve(sum(a));
+
+    // A seeded generator: the same seed always repeats the same numbers.
+    seed(42);
+    serve(rand([4]));
+
+    send 0;
+}
