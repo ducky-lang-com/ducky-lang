@@ -97,6 +97,7 @@ all passing.**
 | N27 | Tensor parameters and return types | done — v0.8.0; `fn scale(t: tensor[2, 3], k: float) -> tensor[2, 3]` |
 | N28 | Tensor runtime is **emitted only when used** | done — v0.8.0; an AST walk sets the flag, so a program that never mentions tensors links none of it (15 KB vs 21 KB binary) |
 | N29 | Builtin names stay user-definable | done — v0.8.0; only `serve`/`len`/`str`/`input_line`/`float`/`int`/`push`/`scan_*`/`tensor` are reserved. A user `sum`, `rand`, `max` or `min` shadows the builtin of the same name, so programs written before v0.8.0 keep compiling unchanged |
+| N30 | `serve()` prints arrays and structs | done — v0.8.0; arrays as `[1, 2, 3]`, structs as `Name {field: value, ...}` with fields in declaration order. Nesting composes and never emits a line break of its own, so a struct holding an array, a tensor and another struct prints on one line. No run-time type tag: the compiler writes a descriptor per struct type it prints (name, field count, name/tag/extra/extra2 per field) and the walker reads it. Every address in a descriptor is stored as a **gap** (`label - descriptor`) rather than an absolute pointer, so the table carries no relocation — a program that links with `cc` (the `extern fn` path, which asks for a PIE) would otherwise get text relocations in `.rodata`. `void` remains the only thing `serve` rejects. This is what makes `serve(shape(t))` possible |
 
 **Update v0.4.0:** floats, arrays (with string indexing), `const`, `push()`
 and the numeric conversions. The suite is then **59 tests (22 runtime + 37
@@ -120,14 +121,16 @@ stays `.duck`), plus the four `scan_*` builtins (N15) and `extern`
 declarations with C-library linking (N16). The suite is now **99 tests
 (26 runtime + 73 error), all passing.**
 
-**Update v0.8.0 — the AI core (N17–N29):** the `tensor` type with
+**Update v0.8.0 — the AI core (N17–N30):** the `tensor` type with
 compile-time shapes, indexing and assignment, element-wise arithmetic,
 `matmul` / `dot`, the activations, the reductions and the two losses, backed
 by an own `exp`/`log` and a seeded generator — all emitted only for programs
-that use tensors, so pure programs stay freestanding and small. Builtin names
+that use tensors, so pure programs stay freestanding and small. `serve()`
+gained arrays and structs (N30), which is what makes `serve(shape(t))`
+possible. Builtin names
 that programs have always been free to define (`sum`, `rand`, `max`, `min`,
 `shape`, …) remain definable: a user definition shadows the builtin. The
-suite is now **108 tests (28 runtime + 80 error), all passing.**
+suite is now **108 tests (29 runtime + 79 error), all passing.**
 
 ## Milestone M2 — Engineering
 

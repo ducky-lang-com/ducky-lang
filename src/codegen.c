@@ -96,6 +96,76 @@ static const char *dims_label(Type t) {
     return label;
 }
 
+/* ---- composite printing --------------------------------------------------
+ *
+ * serve() can be handed anything with a value in it, and the printer has to
+ * know what it is looking at: an array of ints and an array of strings are
+ * both a header word followed by pointers, but they print completely
+ * differently. Rather than carry a run-time type tag, the compiler writes
+ * one down.
+ *
+ *   VT_*        what a slot holds (see value_tag())
+ *   descriptor  one per struct type ever printed: the struct's name, its
+ *               field count, then four words per field - name, tag, extra,
+ *               extra2. The extra words carry the only information the tag
+ *               alone cannot express: which descriptor a nested struct
+ *               needs, which element type an array has, and for a tensor
+ *               its rank and the address of its dimensions table.
+ *
+ * Fields are always one machine word, so a field is at base + 8 * index
+ * whatever its type; only the interpretation differs. */
+enum { VT_INT = 1, VT_FLOAT = 2, VT_BOOL = 3, VT_STR = 4,
+       VT_STRUCT = 5, VT_ARR = 6, VT_TENSOR = 7 };
+
+static int value_tag(Type t) {
+    switch (t) {
+    case TY_INT:      return VT_INT;
+    case TY_FLOAT:    return VT_FLOAT;
+    case TY_BOOL:     return VT_BOOL;
+    case TY_STRING:   return VT_STR;
+    default:
+        if (type_is_struct(t)) return VT_STRUCT;
+        if (type_is_array(t)) return VT_ARR;
+        return VT_TENSOR;
+    }
+}
+
+typedef struct {
+    Type type;
+    const char *label;
+} StructDesc;
+
+static StructDesc *sdescs;
+static int nsdescs, sdescs_cap;
+
+/* The descriptor for `t`, registering it (and, recursively, the descriptor
+ * of every struct it contains) on first use. The entry is appended before
+ * its fields are walked, so a struct that contains itself terminates. */
+static const char *struct_desc_label(Type t) {
+    for (int i = 0; i < nsdescs; i++) {
+        if (sdescs[i].type == t) return sdescs[i].label;
+    }
+    if (nsdescs == sdescs_cap) {
+        sdescs_cap = sdescs_cap ? sdescs_cap * 2 : 8;
+        StructDesc *ns = realloc(sdescs, (size_t)sdescs_cap * sizeof(StructDesc));
+        if (!ns) fatal("out of memory");
+        sdescs = ns;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), ".Lsd%d", nsdescs);
+    char *label = arena_alloc(sizeof buf);
+    memcpy(label, buf, sizeof buf);
+    sdescs[nsdescs].type = t;
+    sdescs[nsdescs].label = label;
+    nsdescs++;
+
+    StructDecl *sd = struct_type_decl(t);
+    for (int i = 0; sd && i < sd->nfields; i++) {
+        if (type_is_struct(sd->fields[i]->type)) struct_desc_label(sd->fields[i]->type);
+    }
+    return label;
+}
+
 /* The 64-bit IEEE-754 pattern of a double, for movabs into a register. The
  * tensor routines need a handful of named constants (ln2, 0.5, 1.0, ...);
  * emitting their bits keeps them exact without a data section. */
@@ -504,16 +574,33 @@ static void gen_call(Expr *e) {
         switch (e->call.builtin) {
         case BUILTIN_SERVE: {
             /* serve() passes its argument in a register, so the alignment
-             * padding can be applied right before the call. A tensor also
+             * padding can be applied right before each call. A tensor also
              * carries its (compile-time) dimensions, which are handed over
-             * as a pointer into .rodata for the printer to walk. */
+             * as a pointer into .rodata for the printer to walk; a struct
+             * is handed the descriptor written for it. Every composite
+             * writes its text first and the line break is a call of its
+             * own, so nesting simply never emits one. */
             Expr *arg = e->call.args[0];
             gen_expr(arg);
             emit("    mov %%rax, %%rdi\n");
+            if (type_is_struct(arg->type)) {
+                emit("    lea %s(%%rip), %%rsi\n",
+                     struct_desc_label(arg->type));
+                emit_call("ducky_write_struct");
+                emit_call("ducky_nl");
+                break;
+            }
+            if (type_is_array(arg->type)) {
+                emit("    mov $%d, %%rsi\n", value_tag(type_elem(arg->type)));
+                emit_call("ducky_write_arr");
+                emit_call("ducky_nl");
+                break;
+            }
             if (type_is_tensor(arg->type)) {
                 emit("    mov $%d, %%rsi\n", tensor_rank(arg->type));
                 emit("    lea %s(%%rip), %%rdx\n", dims_label(arg->type));
-                emit_call("ducky_serve_tensor");
+                emit_call("ducky_write_tensor");
+                emit_call("ducky_nl");
                 break;
             }
             const char *rt = arg->type == TY_INT     ? "ducky_serve_int"
@@ -1116,8 +1203,21 @@ static void emit_runtime(void) {
     emit("    mov $60, %%eax\n");
     emit("    syscall\n");
 
-    /* serve(value: int) -> writes the decimal value and a newline */
-    emit("\nducky_serve_int:\n");
+    /* A bare newline. Every serve() flavour ends by falling into (or
+     * jumping at) it, and the composite printers call it between the value
+     * and the line break. It is only syscalls, so it needs no alignment. */
+    emit("\nducky_nl:\n");
+    emit("    lea .Lnl(%%rip), %%rsi\n");
+    emit("    mov $1, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit("    ret\n");
+
+    /* write the decimal value with no newline. The array and struct
+     * printers need the digits without the line break; ducky_serve_int
+     * below is this plus ducky_nl. */
+    emit("\nducky_write_int:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    sub $32, %%rsp\n");
@@ -1147,38 +1247,44 @@ static void emit_runtime(void) {
     emit("    mov $1, %%eax\n");
     emit("    mov $1, %%edi\n");
     emit("    syscall\n");
-    emit("    lea .Lnl(%%rip), %%rsi\n");
-    emit("    mov $1, %%edx\n");
-    emit("    mov $1, %%eax\n");
-    emit("    mov $1, %%edi\n");
-    emit("    syscall\n");
     emit("    mov %%rbp, %%rsp\n");
     emit("    pop %%rbp\n");
     emit("    ret\n");
 
-    /* serve(value: bool) -> writes true/false and a newline */
-    emit("\nducky_serve_bool:\n");
-    emit("    push %%rbp\n");
-    emit("    mov %%rsp, %%rbp\n");
+    /* serve(value: int) -> writes the decimal value and a newline */
+    emit("\nducky_serve_int:\n");
+    emit("    sub $8, %%rsp\n");      /* entries arrive 8 mod 16 */
+    emit("    call ducky_write_int\n");
+    emit("    add $8, %%rsp\n");
+    emit("    jmp ducky_nl\n");
+
+    /* write true/false and stop. .Ltrue and .Lfalse read "true\n" and
+     * "false\n", so these lengths are the same strings without the line
+     * break that ducky_serve_bool adds back. */
+    emit("\nducky_write_bool:\n");
     emit("    test %%rdi, %%rdi\n");
     emit("    jz .Lsb_false\n");
     emit("    lea .Ltrue(%%rip), %%rsi\n");
-    emit("    mov $5, %%edx\n");
+    emit("    mov $4, %%edx\n");
     emit("    jmp .Lsb_write\n");
     emit(".Lsb_false:\n");
     emit("    lea .Lfalse(%%rip), %%rsi\n");
-    emit("    mov $6, %%edx\n");
+    emit("    mov $5, %%edx\n");
     emit(".Lsb_write:\n");
     emit("    mov $1, %%eax\n");
     emit("    mov $1, %%edi\n");
     emit("    syscall\n");
-    emit("    pop %%rbp\n");
     emit("    ret\n");
 
-    /* serve(value: string) -> writes the string and a newline */
-    emit("\nducky_serve_str:\n");
-    emit("    push %%rbp\n");
-    emit("    mov %%rsp, %%rbp\n");
+    /* serve(value: bool) -> writes true/false and a newline */
+    emit("\nducky_serve_bool:\n");
+    emit("    sub $8, %%rsp\n");
+    emit("    call ducky_write_bool\n");
+    emit("    add $8, %%rsp\n");
+    emit("    jmp ducky_nl\n");
+
+    /* write the bytes of a string with no newline */
+    emit("\nducky_write_str:\n");
     emit("    mov %%rdi, %%rsi\n");
     emit("    xor %%edx, %%edx\n");
     emit(".Lss_len:\n");
@@ -1190,14 +1296,34 @@ static void emit_runtime(void) {
     emit("    mov $1, %%eax\n");
     emit("    mov $1, %%edi\n");
     emit("    syscall\n");
-    emit("    lea .Lnl(%%rip), %%rsi\n");
+    emit("    ret\n");
+
+    /* the same, quoted - a string inside a container has to keep its
+     * boundaries visible, which it loses the moment it is bare */
+    emit("\nducky_write_qstr:\n");
+    emit("    push %%rbx\n");
+    emit("    mov %%rdi, %%rbx\n");
+    emit("    lea .Lquote(%%rip), %%rsi\n");
     emit("    mov $1, %%edx\n");
     emit("    mov $1, %%eax\n");
     emit("    mov $1, %%edi\n");
     emit("    syscall\n");
-    emit("    mov %%rbp, %%rsp\n");
-    emit("    pop %%rbp\n");
+    emit("    mov %%rbx, %%rdi\n");
+    emit("    call ducky_write_str\n");
+    emit("    lea .Lquote(%%rip), %%rsi\n");
+    emit("    mov $1, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit("    pop %%rbx\n");
     emit("    ret\n");
+
+    /* serve(value: string) -> writes the string and a newline */
+    emit("\nducky_serve_str:\n");
+    emit("    sub $8, %%rsp\n");
+    emit("    call ducky_write_str\n");
+    emit("    add $8, %%rsp\n");
+    emit("    jmp ducky_nl\n");
 
     /* streq(a: string, b: string) -> 1 when the contents are equal */
     emit("\nducky_streq:\n");
@@ -2100,7 +2226,7 @@ static void emit_runtime(void) {
     emit("    ret\n");
 
     /* serve(value: float) -> writes the decimal form and a newline */
-    emit("\nducky_serve_float:\n");
+    emit("\nducky_write_float:\n");
     emit("    push %%rbp\n");
     emit("    mov %%rsp, %%rbp\n");
     emit("    sub $80, %%rsp\n");
@@ -2111,14 +2237,231 @@ static void emit_runtime(void) {
     emit("    mov $1, %%eax\n");
     emit("    mov $1, %%edi\n");
     emit("    syscall\n");
-    emit("    lea .Lnl(%%rip), %%rsi\n");
+    emit("    mov %%rbp, %%rsp\n");
+    emit("    pop %%rbp\n");
+    emit("    ret\n");
+
+    emit("\nducky_serve_float:\n");
+    emit("    sub $8, %%rsp\n");
+    emit("    call ducky_write_float\n");
+    emit("    add $8, %%rsp\n");
+    emit("    jmp ducky_nl\n");
+
+    /* ---- the composite printers ------------------------------------------
+     *
+     * duck_write_value reads one word at the address it is given and
+     * interprets it with the tag the compiler attached to that slot. It is
+     * the only place that knows what a word means; arrays and structs just
+     * walk their own layout and hand each word to it.
+     *
+     * Five pushes in each of the two walkers: entries arrive 8 mod 16 and
+     * an odd number of them lands on 0, so every inner call is aligned.
+     * r12..r14 and rbx are callee-saved and survive the calls. */
+
+    emit("\nducky_write_value:\n");
+    emit("    push %%rbp\n");
+    emit("    mov %%rsp, %%rbp\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    push %%r13\n");
+    emit("    push %%r14\n");
+    emit("    mov %%rdi, %%r12\n");           /* the slot               */
+    emit("    mov %%rsi, %%r13\n");           /* tag                    */
+    emit("    mov %%rdx, %%r14\n");           /* extra                  */
+    emit("    mov %%rcx, %%rbx\n");           /* extra2                 */
+    emit("    cmp $%d, %%r13\n", VT_INT);
+    emit("    je .Lwv_int\n");
+    emit("    cmp $%d, %%r13\n", VT_FLOAT);
+    emit("    je .Lwv_flt\n");
+    emit("    cmp $%d, %%r13\n", VT_BOOL);
+    emit("    je .Lwv_bool\n");
+    emit("    cmp $%d, %%r13\n", VT_STR);
+    emit("    je .Lwv_str\n");
+    emit("    cmp $%d, %%r13\n", VT_STRUCT);
+    emit("    je .Lwv_st\n");
+    emit("    cmp $%d, %%r13\n", VT_ARR);
+    emit("    je .Lwv_arr\n");
+    emit("    cmp $%d, %%r13\n", VT_TENSOR);
+    emit("    je .Lwv_ten\n");
+    emit("    jmp .Lwv_done\n");              /* not a type we print    */
+    emit(".Lwv_int:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    call ducky_write_int\n");
+    emit("    jmp .Lwv_done\n");
+    emit(".Lwv_flt:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    call ducky_write_float\n");
+    emit("    jmp .Lwv_done\n");
+    emit(".Lwv_bool:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    call ducky_write_bool\n");
+    emit("    jmp .Lwv_done\n");
+    emit(".Lwv_str:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    call ducky_write_qstr\n");
+    emit("    jmp .Lwv_done\n");
+    emit(".Lwv_st:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    mov %%r14, %%rsi\n");
+    emit("    call ducky_write_struct\n");
+    emit("    jmp .Lwv_done\n");
+    emit(".Lwv_arr:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    mov %%r14, %%rsi\n");
+    emit("    call ducky_write_arr\n");
+    emit("    jmp .Lwv_done\n");
+    emit(".Lwv_ten:\n");
+    emit("    mov (%%r12), %%rdi\n");
+    emit("    mov %%r14, %%rsi\n");
+    emit("    mov %%rbx, %%rdx\n");
+    emit("    call ducky_write_tensor\n");
+    emit(".Lwv_done:\n");
+    emit("    pop %%r14\n");
+    emit("    pop %%r13\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
+    emit("    pop %%rbp\n");
+    emit("    ret\n");
+
+    /* write_arr(ptr, elem_tag) -> "[a, b, c]" with no line break. The
+     * header word is the element count and the elements follow it, one
+     * machine word each - the layout arrays already have. */
+    emit("\nducky_write_arr:\n");
+    emit("    push %%rbp\n");
+    emit("    mov %%rsp, %%rbp\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    push %%r13\n");
+    emit("    push %%r14\n");
+    emit("    mov %%rdi, %%r12\n");
+    emit("    mov %%rsi, %%r13\n");
+    emit("    mov (%%r12), %%rbx\n");         /* count                  */
+    emit("    lea .LbrOpen(%%rip), %%rsi\n");
     emit("    mov $1, %%edx\n");
     emit("    mov $1, %%eax\n");
     emit("    mov $1, %%edi\n");
     emit("    syscall\n");
-    emit("    mov %%rbp, %%rsp\n");
+    emit("    xor %%r14d, %%r14d\n");
+    emit(".Lwa_loop:\n");
+    emit("    cmp %%rbx, %%r14\n");
+    emit("    jge .Lwa_end\n");
+    emit("    test %%r14, %%r14\n");
+    emit("    jz .Lwa_first\n");
+    emit("    lea .Lsep(%%rip), %%rsi\n");
+    emit("    mov $2, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit(".Lwa_first:\n");
+    emit("    lea 8(%%r12, %%r14, 8), %%rdi\n");
+    emit("    mov %%r13, %%rsi\n");
+    emit("    xor %%edx, %%edx\n");
+    emit("    xor %%ecx, %%ecx\n");
+    emit("    call ducky_write_value\n");
+    emit("    inc %%r14\n");
+    emit("    jmp .Lwa_loop\n");
+    emit(".Lwa_end:\n");
+    emit("    lea .LbrClose(%%rip), %%rsi\n");
+    emit("    mov $1, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit("    pop %%r14\n");
+    emit("    pop %%r13\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
     emit("    pop %%rbp\n");
     emit("    ret\n");
+
+    /* write_struct(ptr, desc) -> "Name {field: value, ...}" with no line
+     * break. The descriptor is the layout the compiler wrote down: name,
+     * field count, then name/tag/extra/extra2 per field. */
+    emit("\nducky_write_struct:\n");
+    emit("    push %%rbp\n");
+    emit("    mov %%rsp, %%rbp\n");
+    emit("    push %%rbx\n");
+    emit("    push %%r12\n");
+    emit("    push %%r13\n");
+    emit("    push %%r14\n");
+    emit("    mov %%rdi, %%r12\n");
+    emit("    mov %%rsi, %%r13\n");
+    emit("    mov 8(%%r13), %%rbx\n");        /* field count            */
+    emit("    mov (%%r13), %%rax\n");         /* the name, stored as a gap */
+    emit("    lea (%%r13, %%rax), %%rdi\n");
+    emit("    call ducky_write_str\n");
+    emit("    lea .Lbrace(%%rip), %%rsi\n");  /* " {"                   */
+    emit("    mov $2, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit("    xor %%r14d, %%r14d\n");
+    emit(".Lws_loop:\n");
+    emit("    cmp %%rbx, %%r14\n");
+    emit("    jge .Lws_end\n");
+    emit("    test %%r14, %%r14\n");
+    emit("    jz .Lws_first\n");
+    emit("    lea .Lsep(%%rip), %%rsi\n");
+    emit("    mov $2, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit(".Lws_first:\n");
+    emit("    mov %%r14, %%rax\n");
+    emit("    shl $5, %%rax\n");                     /* i * 32: the descriptor */
+    emit("    lea 16(%%r13, %%rax), %%rcx\n");       /* &field name        */
+    emit("    mov (%%rcx), %%rdi\n");
+    emit("    lea (%%r13, %%rdi), %%rdi\n");         /* gap -> address     */
+    emit("    call ducky_write_str\n");
+    emit("    lea .Lcolon(%%rip), %%rsi\n");         /* ": "               */
+    emit("    mov $2, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit("    mov %%r14, %%rax\n");
+    emit("    shl $5, %%rax\n");
+    emit("    lea 24(%%r13, %%rax), %%rcx\n");       /* &tag               */
+    emit("    mov (%%rcx), %%rsi\n");
+    emit("    lea 32(%%r13, %%rax), %%rcx\n");       /* &extra             */
+    emit("    mov (%%rcx), %%rdx\n");
+    emit("    lea 40(%%r13, %%rax), %%rcx\n");       /* &extra2            */
+    emit("    mov (%%rcx), %%rcx\n");
+    /* A nested descriptor and a tensor's dimensions table are gaps as well;
+     * everything else (an element tag, a rank) is a value and is passed on
+     * as it stands. %r13 is still the base, so one lea restores each. */
+    emit("    cmp $%d, %%rsi\n", VT_STRUCT);
+    emit("    jne .Lws_notst\n");
+    emit("    lea (%%r13, %%rdx), %%rdx\n");
+    emit("    jmp .Lws_res\n");
+    emit(".Lws_notst:\n");
+    emit("    cmp $%d, %%rsi\n", VT_TENSOR);
+    emit("    jne .Lws_res\n");
+    emit("    lea (%%r13, %%rcx), %%rcx\n");
+    emit(".Lws_res:\n");
+    emit("    lea (%%r12, %%r14, 8), %%rdi\n");      /* &field i           */
+    emit("    call ducky_write_value\n");
+    emit("    inc %%r14\n");
+    emit("    jmp .Lws_loop\n");
+    emit(".Lws_end:\n");
+    emit("    lea .LbraceClose(%%rip), %%rsi\n");
+    emit("    mov $1, %%edx\n");
+    emit("    mov $1, %%eax\n");
+    emit("    mov $1, %%edi\n");
+    emit("    syscall\n");
+    emit("    pop %%r14\n");
+    emit("    pop %%r13\n");
+    emit("    pop %%r12\n");
+    emit("    pop %%rbx\n");
+    emit("    pop %%rbp\n");
+    emit("    ret\n");
+
+    /* duck_write_value's tensor branch is reachable only through a struct
+     * that has a tensor field, and such a program sets g_tensors and gets
+     * the real printer. Everywhere else the reference still has to resolve,
+     * so hand it a body that cannot run. */
+    if (!g_tensors) {
+        emit("\nducky_write_tensor:\n");
+        emit("    ret\n");
+    }
 
     /* str(value: float) -> the decimal form on the heap */
     emit("\nducky_str_float:\n");
@@ -3075,7 +3418,7 @@ static void emit_tensor_runtime(void) {
      * registers: six pushes would leave the stack unaligned for a call, and
      * this ordering keeps the epilogue a plain sequence of pops. */
     emit_verbatim(
-        "\nducky_serve_tensor:\n"
+        "\nducky_write_tensor:\n"
         "    push %rbp\n"
         "    mov %rsp, %rbp\n"
         "    sub $8, %rsp\n"
@@ -3115,11 +3458,6 @@ static void emit_tensor_runtime(void) {
         "    mov $1, %eax\n"
         "    mov $1, %edi\n"
         "    syscall\n"                        /* write(1, ...)       */
-        "    lea .Lnl(%rip), %rsi\n"
-        "    mov $1, %edx\n"
-        "    mov $1, %eax\n"
-        "    mov $1, %edi\n"
-        "    syscall\n"
         "    pop %r15\n"
         "    pop %r14\n"
         "    pop %r13\n"
@@ -3357,6 +3695,15 @@ static int expr_uses_tensor(const Expr *e) {
 }
 
 static int program_uses_tensors(const Program *prog) {
+    /* A struct field of tensor type reaches the tensor printer through the
+     * struct printer without any tensor-typed expression ever being
+     * evaluated here, so the declarations are walked too. */
+    for (int i = 0; i < prog->nstructs; i++) {
+        StructDecl *sd = prog->structs[i];
+        for (int f = 0; f < sd->nfields; f++) {
+            if (type_is_tensor(sd->fields[f]->type)) return 1;
+        }
+    }
     for (int i = 0; i < prog->nfuncs; i++) {
         const Func *f = prog->funcs[i];
         if (type_is_tensor(f->ret)) return 1;
@@ -3401,6 +3748,16 @@ void generate(const SourceFile *src, Program *prog, FILE *out) {
     emit(".Lfalse:\n    .ascii \"false\\n\"\n");
     emit(".Lstr_true:\n    .string \"true\"\n");
     emit(".Lstr_false:\n    .string \"false\"\n");
+    /* Punctuation for the composite printers. `.ascii`, not `.string`: the
+     * routines write an exact byte count, and a terminator would show up as
+     * a stray character at the end of every bracket. */
+    emit(".Lquote:\n    .ascii \"\\\"\"\n");
+    emit(".LbrOpen:\n    .ascii \"[\"\n");
+    emit(".LbrClose:\n    .ascii \"]\"\n");
+    emit(".Lsep:\n    .ascii \", \"\n");
+    emit(".Lcolon:\n    .ascii \": \"\n");
+    emit(".Lbrace:\n    .ascii \" {\"\n");
+    emit(".LbraceClose:\n    .ascii \"}\"\n");
     emit(".Lempty:\n    .string \"\"\n");
     emit(".Loommsg:\n    .ascii \"ducky: out of memory\\n\"\n");
     emit(".Loobmsg:\n    .ascii \"ducky: index out of bounds\\n\"\n");
@@ -3433,6 +3790,54 @@ void generate(const SourceFile *src, Program *prog, FILE *out) {
         emit("%s:\n    .string \"", strs[i].label);
         emit_string_bytes(strs[i].text);
         emit("\"\n");
+    }
+    /* Struct descriptors, gathered while the functions were generated.
+     * They come before the tensor rodata because a tensor field registers
+     * its dimensions table, and that table has to exist before it is
+     * referenced. */
+    for (int i = 0; i < nsdescs; i++) {
+        Type t = sdescs[i].type;
+        StructDecl *sd = struct_type_decl(t);
+        emit("%s:\n", sdescs[i].label);
+        /* Every address below is a *gap* - `label - this descriptor` - and
+         * not the address itself. A difference of two symbols in the same
+         * section is a plain constant the assembler folds away, so the table
+         * needs no relocation at all: a program that links with cc (the
+         * `extern fn` path, which asks for a PIE) would otherwise end up with
+         * text relocations in read-only data. The walker adds the base back
+         * in, and it already has the base in %r13. */
+        emit("    .quad .Lsdn%d - %s\n", i, sdescs[i].label);   /* name   */
+        emit("    .quad %d\n", sd ? sd->nfields : 0);           /* count  */
+        for (int f = 0; sd && f < sd->nfields; f++) {
+            Field *fl = sd->fields[f];
+            Type ft = fl->type;
+            emit("    .quad .Lsdf%d_%d - %s\n", i, f, sdescs[i].label);
+            emit("    .quad %d\n", value_tag(ft));              /* tag    */
+            if (type_is_struct(ft)) {
+                emit("    .quad %s - %s\n",
+                     struct_desc_label(ft), sdescs[i].label);
+            } else if (type_is_array(ft)) {
+                emit("    .quad %d\n", value_tag(type_elem(ft)));
+            } else if (type_is_tensor(ft)) {
+                emit("    .quad %d\n", tensor_rank(ft));
+            } else {
+                emit("    .quad 0\n");
+            }
+            if (type_is_tensor(ft)) {
+                emit("    .quad %s - %s\n",
+                     dims_label(ft), sdescs[i].label);          /* extra2 */
+            } else {
+                emit("    .quad 0\n");
+            }
+        }
+        emit(".Lsdn%d:\n    .string \"", i);
+        if (sd) emit_string_bytes(sd->name);
+        emit("\"\n");
+        for (int f = 0; sd && f < sd->nfields; f++) {
+            emit(".Lsdf%d_%d:\n    .string \"", i, f);
+            emit_string_bytes(sd->fields[f]->name);
+            emit("\"\n");
+        }
     }
     if (g_tensors) emit_tensor_rodata();
 

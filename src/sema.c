@@ -505,9 +505,11 @@ static Type check_expr(Expr *e) {
                     e->call.nargs);
             }
             Type t = check_expr(e->call.args[0]);
-            if (t == TY_VOID || type_is_array(t) || type_is_struct(t)) {
-                err_node(e, "cannot pass a value of type '%s' to serve()",
-                    type_name(t));
+            /* Arrays, structs and tensors all print (v0.8.0 lifted the
+             * restriction that used to sit on arrays and structs); only a
+             * value that does not exist - void - is left. */
+            if (t == TY_VOID) {
+                err_node(e, "cannot pass a value of type 'void' to serve()");
             }
             e->call.builtin = BUILTIN_SERVE;
             return e->type = TY_VOID;

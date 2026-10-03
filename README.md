@@ -44,6 +44,10 @@ matrix × vector), `dot`, the activations `relu` / `sigmoid` / `tanh` /
 `log` this compiler emits itself — 1 ulp against libm across the whole range —
 plus a seeded generator, so pure programs still link **no libc and no libm**.
 The tensor runtime is emitted only when a program actually uses tensors.
+`serve()` grew past scalars and tensors in the same release: it now prints
+arrays (`[1, 2, 3]`) and whole structs (`Point {x: 3, y: -4}`), nesting
+without ever emitting a line break of its own — which is what makes
+`serve(shape(t))` possible.
 See [USAGE.md](USAGE.md) for the walkthrough and [ROADMAP.md](ROADMAP.md) for
 what comes next: automatic differentiation, model files and the network layer.
 
@@ -282,7 +286,9 @@ source .duck ──▶ lexer ──▶ parser ──▶ semantic analysis ──
    where the ABI expects them. Floats travel through `%rax` as their bit
    pattern and only enter the XMM registers for each operation.
 5. **Runtime** — emitted into every program: `_start`, `serve` support for
-   ints/floats/bools/strings, float formatting, string comparison,
+   ints/floats/bools/strings **and for arrays, structs and tensors** (a
+   struct is printed from a descriptor the compiler writes down for it, so
+   nesting composes), float formatting, string comparison,
    concatenation, `str`, `input_line`, the `scan_int` / `scan_float` parsers,
    array bounds checks, `push` and a small `brk`-based allocator — all
    implemented with raw `write`, `read`, `brk` and `exit` syscalls. Programs

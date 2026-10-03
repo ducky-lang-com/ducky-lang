@@ -1,5 +1,0 @@
-struct Point { x: int }
-fn main() -> int {
-    serve(Point(1));
-    send 0;
-}

@@ -1,0 +1,8 @@
+fn nothing() {
+    serve("side effect only");
+}
+
+fn main() -> int {
+    serve(nothing());
+    send 0;
+}

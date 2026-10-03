@@ -264,9 +264,13 @@ serve(len(ys));        // 3
 Arrays have **reference semantics**: assigning one array variable to another
 makes them share the same block, exactly like structs.
 
-Two things arrays cannot do yet: `serve` rejects them, and `==` rejects them
-(compare element by element instead). Both are deliberate v0.8.0 limits and
-both produce a diagnostic that says what to do.
+One thing arrays cannot do: `==` rejects them (compare element by element
+instead), with a diagnostic that says so.
+
+```duck
+serve([1, 2, 3]);        // [1, 2, 3]
+serve(["a", "b"]);       // ["a", "b"]   quoted inside, bare at the top level
+```
 
 ```duck
 fn main() -> int {
@@ -329,6 +333,8 @@ fn main() -> int {
     q.x = 99;
     serve(p.x);              // 99
 
+    serve(p);                // Point {x: 99, y: 10}
+
     send 0;
 }
 ```
@@ -338,7 +344,9 @@ fn main() -> int {
 * Declaration order is free — a struct can mention a struct defined later.
 * Structs can be parameters, return values and fields of other structs.
 * A struct and a function may not share a name.
-* You cannot compare whole structs or `serve` one; compare and print fields.
+* You cannot compare whole structs — compare the fields you care about.
+* `serve` prints one as `Point {x: 1, y: 2}`: the struct's name, then every
+  field in declaration order. Nesting works the same way (see §16).
 
 ---
 
@@ -446,13 +454,10 @@ Both mismatches are compile errors that quote the two counts.
 
 ```duck
 serve(len(w));           // 2          -- the outermost dimension
-serve(shape(w)[0]);      // 2
+serve(shape(w));         // [2, 3]     -- the whole shape
 serve(shape(w)[1]);      // 3
 serve(len(shape(w)));    // 2          -- the rank
 ```
-
-> `serve` does not accept arrays yet, so a whole `[int]` cannot be printed;
-> index into it as above.
 
 ### Indexing and assignment
 
@@ -659,8 +664,7 @@ Nothing is written when compilation fails. A few classes worth knowing:
 | no `fn main() -> int` | `the program must define an entry point: 'fn main() -> int'` |
 | a missing `send` on some path | definite-return analysis |
 | `1 + 1.5` | `operator '+' requires two 'float' values or two 'int' values - Ducky has no implicit conversion (use float(x)), found 'int' and 'float'` |
-| `serve([1,2])` | `cannot pass a value of type '[int]' to serve()` |
-| `serve(P(1))` | `cannot pass a value of type 'P' to serve()` |
+| `serve(nothing())` on a `void` function | `cannot pass a value of type 'void' to serve()` |
 | `print("x")` | `'print' does not exist in Ducky - the output builtin is 'serve'` |
 | a wrong tensor shape | `type mismatch: 't' is declared as 'tensor[2]' but the initializer has type 'tensor[2, 3]'` |
 | a non-constant dimension | `tensor dimension 'n' must be a compile-time integer constant` |
@@ -680,16 +684,51 @@ programs written before v0.8.0 compiling unchanged.
 `serve` writes through raw `write` syscalls, unbuffered, one value per line:
 
 ```duck
-serve(42);            // 42
-serve(4.5);           // 4.5
-serve(true);          // true
-serve("hi");          // hi
-serve(tensor([3], [1.0, 2.0, 3.0]));   // [1, 2, 3]
-serve(tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));   // [[1, 2, 3], [4, 5, 6]]
+struct Point { x: int, y: int }
+
+fn main() -> int {
+    serve(42);            // 42
+    serve(4.5);           // 4.5
+    serve(true);          // true
+    serve("hi");          // hi
+    serve([1, 2, 3]);     // [1, 2, 3]
+    serve(["a", "b"]);    // ["a", "b"]
+    serve(Point(3, -4));  // Point {x: 3, y: -4}
+    serve(tensor([3], [1.0, 2.0, 3.0]));   // [1, 2, 3]
+    serve(tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    send 0;
+}
 ```
 
-Floats print with 15 rounded significant digits and trailing zeros trimmed,
-so `0.1 + 0.2` prints `0.3`.
+The last one prints `[[1, 2, 3], [4, 5, 6]]`.
+
+Composites nest, and nesting never emits a line break of its own — so a
+struct holding an array, a tensor and another struct comes out on one line:
+
+```duck
+struct Point { x: int, y: int }
+struct Account {
+    owner: string,
+    balance: float,
+    active: bool,
+    tags: [string],
+    home: Point
+}
+
+fn main() -> int {
+    serve(Account("ducky", 12.5, true, ["vip"], Point(1, 2)));
+    // Account {owner: "ducky", balance: 12.5, active: true,
+    //          tags: ["vip"], home: Point {x: 1, y: 2}}
+    send 0;
+}
+```
+
+Two formatting rules are worth remembering:
+
+* **Strings are bare at the top level and quoted inside a container.**
+  `serve("hi")` prints `hi`, `serve(["hi"])` prints `["hi"]`.
+* **Floats print with 15 rounded significant digits and trailing zeros
+  trimmed**, so `0.1 + 0.2` prints `0.3` and `[1.5, 2.0]` prints `[1.5, 2]`.
 
 The process exit status is `main`'s return value.
 

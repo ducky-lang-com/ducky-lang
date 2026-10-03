@@ -1,0 +1,47 @@
+// printing.duck - serve() renders arrays and structs as well as scalars and
+// tensors, and nests without ever emitting a line break of its own.
+struct Point { x: int, y: int }
+struct Account {
+    owner: string,
+    balance: float,
+    active: bool,
+    tags: [string],
+    home: Point
+}
+
+fn main() -> int {
+    // Arrays, one per element type, plus the empty one.
+    serve([1, 2, 3]);
+    serve([-4, 0]);
+    serve([1.5, 0.25, 2.0]);
+    serve([true, false, true]);
+    serve(["a", "bb", "ccc"]);
+    let empty: [int] = [];
+    serve(empty);
+
+    // Scalars keep the formats they have always had.
+    serve(42);
+    serve(-7);
+    serve(4.5);
+    serve(0.1 + 0.2);
+    serve(true);
+    serve("hello");
+
+    // Structs print their name and every field, in declaration order.
+    serve(Point(3, -4));
+    let a = Account("ducky", 12.5, true, ["vip", "beta"], Point(1, 2));
+    serve(a);
+
+    // A struct holding a tensor, and shape() - both used to be impossible.
+    let l = Layer("enc", tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    serve(l);
+    let t: tensor[2, 3] = zeros([2, 3]);
+    serve(shape(t));
+    serve(len(shape(t)));
+
+    // The tensor printer is untouched by any of this.
+    serve(t);
+    send 0;
+}
+
+struct Layer { name: string, w: tensor[2, 3] }

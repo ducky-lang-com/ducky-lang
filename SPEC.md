@@ -169,6 +169,8 @@ let fs: [float] = [];      // empty, only with an annotation
   unknown length in a loop.
 * **Nested arrays** (`[[int]]`) are not supported yet.
 * Arrays cannot be compared with `==` — compare elements instead.
+* `serve(xs)` prints an array as `[1, 2, 3]`, with strings quoted inside the
+  brackets.
 * Elements live in 8-byte slots: `int`, `float`, `bool` and `string` values
   (pointers) are stored as-is.
 
@@ -202,8 +204,9 @@ struct Point {
   `q.x = 7` is visible through `p` (like arrays). There is no copy operation.
 * **Comparison is rejected**: `p == q` and `p != q` are errors — compare the
   fields you care about.
-* **`serve` cannot print a struct** (there is no record syntax yet); pass the
-  fields one by one.
+* **`serve` prints a struct** as `Name {field: value, ...}`, with the fields
+  in declaration order and every nested value rendered the same way a
+  top-level one would be.
 * **Arrays of structs** (`[Point]`) are not supported yet, like nested arrays.
 * Values of struct type may be parameters, `let` initializers (with a
   `Point` annotation) and return values; they travel as plain pointers.
@@ -625,7 +628,7 @@ arity and argument types must match exactly. A call whose function returns
 
 | Call | Result | Description |
 |---|---|---|
-| `serve(value)` | `void` | Writes `value` (`int`, `float`, `bool` or `string`) to standard output followed by a newline, using raw `write` syscalls (unbuffered). Arrays, structs and `void` are rejected. |
+| `serve(value)` | `void` | Writes `value` to standard output followed by a newline, using raw `write` syscalls (unbuffered). Accepts `int`, `float`, `bool`, `string`, arrays, structs and tensors (§3.3). `void` is rejected — there is nothing to print. An array prints as `[1, 2, 3]`, a struct as `Name {field: value, ...}`, a tensor as nested lists; nesting composes, so a struct holding an array and a tensor prints on one line. Strings are quoted **inside** a container (`["a", "b"]`) and bare at the top level. |
 | `len(x)` | `int` | Length of a string in bytes, the number of elements of an array, or the **outermost dimension** of a tensor (§3.3). |
 | `str(value)` | `string` | Decimal text of an `int` (`str(-7) == "-7"`), the float form of a `float` (§6.3), or `"true"` / `"false"` of a `bool`. |
 | `input_line()` | `string` | Reads one line from standard input and returns it without the trailing newline. At EOF returns `""`. Reads at most 4095 bytes per call; a longer line continues on the next call. |
@@ -750,9 +753,13 @@ tensor-ctor  := "tensor" "(" expr "," expr ")" ;  (* shape, flat data *)
   `ducky_str_int`, `ducky_str_bool`, `ducky_str_float`, `ducky_fmt_float`,
   `ducky_str_at`, `ducky_push`, `ducky_oob`, `ducky_input`, `ducky_scan_int`,
   `ducky_scan_float` and the data symbol `ducky_brk`). The pre-rename `duck_`
-  prefix is free again as of v0.7.0. From v0.8.0 the tensor runtime adds
+  prefix is free again as of v0.7.0. Composite printing adds `ducky_nl`,
+  `ducky_write_int`, `ducky_write_float`, `ducky_write_bool`,
+  `ducky_write_str`, `ducky_write_qstr`, `ducky_write_value`,
+  `ducky_write_arr`, `ducky_write_struct` and `ducky_write_tensor`. From
+  v0.8.0 the tensor runtime adds
   `ducky_exp`, `ducky_log`, `ducky_dot`, `ducky_matmul`, `ducky_softmax`,
-  `ducky_serve_tensor`, `ducky_trand`, `ducky_rngstate` and the rest of that
+  `ducky_trand`, `ducky_rngstate` and the rest of that
   family; they are emitted only for programs that use tensors (§3.3).
 * Function and struct names may not collide with each other or with a
   constant; field names live in their own namespace (accessed through `.`).
