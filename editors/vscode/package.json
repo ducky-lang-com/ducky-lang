@@ -2,7 +2,7 @@
   "name": "ducky-lang",
   "displayName": "Ducky",
   "description": "Syntax highlighting and language support for the Ducky programming language (ducky-lang)",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "publisher": "didacg",
   "icon": "assets/icon.png",
   "engines": {

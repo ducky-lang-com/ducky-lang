@@ -1,6 +1,6 @@
 # Ducky Language Specification
 
-**Version 0.8.0** — this document defines the syntax and semantics accepted by
+**Version 0.9.0** — this document defines the syntax and semantics accepted by
 `duckyc`, the Ducky compiler.
 
 Ducky is a small, statically typed, imperative language. It compiles straight to
@@ -659,12 +659,78 @@ arity and argument types must match exactly. A call whose function returns
 | `mse(p, y)` | `float` | Mean squared error between tensors of the same shape: `Σ(pᵢ−yᵢ)²/n`. |
 | `cross_entropy(logits, i)` | `float` | `logsumexp(logits) − logits[i]`, computed as `m + log(Σeˣʲ−ᵐ) − xᵢ` so large logits never overflow. |
 
+#### Differentiation builtins (v0.9.0)
+
+| Call | Result | Description |
+|---|---|---|
+| `step(x)` | tensor | Element-wise Heaviside: `1` where `x > 0`, `0` otherwise (`NaN` gives `0`). Exactly `relu`'s derivative. |
+| `matmul_tn(a, b)` | tensor | `aᵀ · b` with `a` rank 2 (`m×k`) and `b` rank 2 or rank 1 (`m×n`); the leading dimensions must agree. Result `k×n`, rank = rank of `b`. |
+| `matmul_nt(a, b)` | tensor | `a · bᵀ` with `a` (`m×n`) and `b` (`k×n`), either rank 1 or rank 2; the column counts must agree. Result rank 2, `m×k`. |
+| `cross_entropy_grad(logits, i)` | tensor | `softmax(logits) − onehot(i)`, the derivative of `cross_entropy` with respect to its logits. |
+
+These four are the pieces the backward pass of [`grad`](#special-form-gradfx)
+is written with, and they are ordinary calls: a hand-written training loop can
+use them directly.
+
+A rank-1 tensor passed to `matmul`, `matmul_tn` or `matmul_nt` is read as a
+single column: `tensor[k]` has the same row-major layout as `tensor[k, 1]`.
+
+#### Special form: `grad(f, x)`
+
+```duck
+fn loss(w: tensor[2, 3]) -> float {
+    send sum(w) * sum(w);         // d/dw = 2*sum(w)
+}
+
+fn main() -> int {
+    let g = grad(loss, tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    serve(g);                     // [[42, 42, 42], [42, 42, 42]]
+    send 0;
+}
+```
+
+`grad(f, x)` evaluates to the derivative of `f` with respect to `x`, as a
+value of `x`'s type. It is **not** an ordinary call: `f` is a name that
+resolves to a top-level function, never an expression, and it is not
+evaluated. The compiler synthesizes `f$grad` beside `f` and rewrites the call
+into an ordinary call to it, so the result runs through the same code
+generator as anything else.
+
+`f` must
+
+* take exactly one parameter, of type `float`, `tensor[…]`, or a struct whose
+  fields are all of those;
+* return `float` — the quantity being minimised;
+* consist only of `let` statements followed by a final `send`. `if`, loops,
+  `break`, `continue`, assignment, nested blocks and calls to any function
+  other than a builtin are rejected, naming the statement.
+
+`grad` is evaluated in reverse mode with no tape: `f$grad` contains `f`'s
+`let` statements unchanged, then one gradient local per differentiable leaf
+(`g$name`, or `g$name_field` for a leaf reached through a struct), then one
+assignment per contribution in reverse order, then a construction of the
+gradient itself. Every node it builds is type-checked by the ordinary
+analyzer, so a shape mistake in the derivative is a compile error rather than
+a misaligned write at run time.
+
+The chain rule covers `+ - * /`, unary `-`, `matmul`, `dot`, `relu`,
+`sigmoid`, `tanh`, `gelu`, `sum`, `mean`, `mse`, `cross_entropy`, tensor
+indexing and struct fields. `tensor(...)`, `zeros`, `ones`, `rand`, `float`,
+`scan_float*` and literals are constants and contribute nothing, so a fixed
+input or a fixed target is simply skipped; the same is true of any binding
+whose type cannot carry a gradient at all (`int`, `bool`, `string`,
+`[int]`). A call that *could* carry a gradient and has no rule — `softmax`,
+`max`, `min` — is an error naming it, not a silent zero. Two
+`grad(f, …)` sites share one `f$grad`; `f` defined in terms of
+`grad(f, …)` is rejected instead of unrolled.
+
 `str` returns a fresh string on the heap (except the constant `true`/`false`,
 which points at static memory), so it can be concatenated freely.
 
 The names in §9 — `serve`, `len`, `str`, `input_line`, `float`, `int`, `push`,
-the `scan_*` family and `tensor` — are reserved and cannot be redefined. Every
-other builtin, including all the tensor builtins above, is a plain name that
+the `scan_*` family, `tensor`, `grad`, `step`, `matmul_tn`, `matmul_nt` and
+`cross_entropy_grad` — are reserved and cannot be redefined. Every other
+builtin, including all the other tensor builtins above, is a plain name that
 **user code may shadow**: a function declared as `sum` or `rand` takes
 precedence over the builtin of the same name at every call site, which is what
 lets programs written before v0.8.0 keep compiling.
@@ -736,6 +802,10 @@ array-literal := "[" [ expr { "," expr } ] "]" ;
 tensor-ctor  := "tensor" "(" expr "," expr ")" ;  (* shape, flat data *)
 ```
 
+`grad(f, x)` (§7) is written like any ordinary call and the parser treats it
+as one; that its first argument must be a *name* resolving to a top-level
+function is a semantic rule, not a grammatical one.
+
 ---
 
 ## 9. Reserved names
@@ -743,9 +813,13 @@ tensor-ctor  := "tensor" "(" expr "," expr ")" ;  (* shape, flat data *)
 * All keywords in §2.4.
 * The reserved builtin names `serve`, `len`, `str`, `input_line`, `float`,
   `int`, `push`, `scan_int`, `scan_float`, `scan_int_line`,
-  `scan_float_line` and `tensor` (they cannot be redefined). Every other
-  builtin — including the whole tensor family of §7 — is shadowable by a user
-  definition of the same name.
+  `scan_float_line`, `tensor` and — since differentiation — `grad`,
+  `step`, `matmul_tn`, `matmul_nt` and `cross_entropy_grad` (they cannot be
+  redefined). Every other builtin — including the rest of the tensor family
+  of §7 — is shadowable by a user definition of the same name. The four
+  added names are the exception because `grad` is a special form and the
+  other three are named by the gradient code the compiler emits for it: a
+  user definition of `step` would change what `grad` computes.
 * Function, constant, struct and field names starting with `_`.
 * Function, constant, struct and field names starting with `ducky_` (the
   generated runtime owns `ducky_serve_int`, `ducky_serve_bool`, `ducky_serve_str`,
@@ -761,6 +835,8 @@ tensor-ctor  := "tensor" "(" expr "," expr ")" ;  (* shape, flat data *)
   `ducky_exp`, `ducky_log`, `ducky_dot`, `ducky_matmul`, `ducky_softmax`,
   `ducky_trand`, `ducky_rngstate` and the rest of that
   family; they are emitted only for programs that use tensors (§3.3).
+  Differentiation adds `ducky_step`, `ducky_matmul_tn`, `ducky_matmul_nt`
+  and `ducky_xent_grad` to that family, on the same condition.
 * Function and struct names may not collide with each other or with a
   constant; field names live in their own namespace (accessed through `.`).
 

@@ -1,0 +1,79 @@
+// grad.duck - automatic differentiation: everything in §15 of USAGE.md.
+//
+// `grad(f, x)` is the derivative of `f` with respect to `x`. It compiles
+// into an ordinary function, `f$grad`, so the numbers below come out of the
+// same code generator as anything else you write.
+
+struct Params {
+    w: tensor[2, 2],
+    b: float,
+}
+
+// f(x) = 3x^2  ->  f'(x) = 6x
+fn poly(x: float) -> float {
+    let a = x * x;
+    let b = a * 3.0;
+    send b;
+}
+
+// f(x) = (x+1)/(x-1)  ->  f'(x) = -2/(x-1)^2
+fn ratio(x: float) -> float {
+    let n = x + 1.0;
+    let d = x - 1.0;
+    send n / d;
+}
+
+// f(w) = sum(w)^2  ->  df/dw = 2*sum(w), the same for every element
+fn energy(w: tensor[2, 3]) -> float {
+    let s = sum(w);
+    send s * s;
+}
+
+// A whole layer: matmul, then the loss, then dA = dG * B^T
+fn layer(a: tensor[2, 2]) -> float {
+    let b = tensor([2, 2], [1.0, 2.0, 3.0, 4.0]);
+    let c = matmul(a, b);
+    let want = tensor([2, 2], [1.0, 0.0, 0.0, 1.0]);
+    send mse(c, want);
+}
+
+// relu is flat on the left, so the gradient there is exactly 0
+fn rect(w: tensor[3]) -> float {
+    let h = relu(w);
+    send mean(h);
+}
+
+// Indexing: only the elements that were read receive anything
+fn pick(w: tensor[3]) -> float {
+    let a = w[0] * w[1];
+    let b = w[2] + a;
+    send b;
+}
+
+// A struct parameter comes back as a struct, one gradient per leaf
+fn step_loss(p: Params) -> float {
+    let h = matmul(p.w, tensor([2], [1.0, 1.0]));
+    let a = relu(h);
+    send mean(a) + p.b * 0.01;
+}
+
+fn main() -> int {
+    serve(grad(poly, 2.0));                       // 12
+    serve(grad(ratio, 3.0));                      // -0.5
+    serve(grad(energy, tensor([2, 3],
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])));        // [[42, 42, 42], [42, 42, 42]]
+    serve(grad(layer, tensor([2, 2],
+        [1.0, 2.0, 3.0, 4.0])));                  // [[13, 29], [28.5, 64.5]]
+    serve(grad(rect, tensor([3],
+        [1.0, -2.0, 3.0])));                      // [0.333333333333333, 0, 0.333333333333333]
+    serve(grad(pick, tensor([3],
+        [2.0, 5.0, 7.0])));                       // [5, 2, 1]
+
+    let p = Params(tensor([2, 2], [1.0, 2.0, 3.0, 4.0]), 0.5);
+    serve(grad(step_loss, p));                    // Params {w: [[0.5, 0.5], [0.5, 0.5]], b: 0.01}
+
+    // Two call sites share one gradient function.
+    serve(grad(poly, 10.0));                      // 60
+
+    send 0;
+}

@@ -23,8 +23,9 @@ installing.
 12. [Calling C](#12-calling-c)
 13. [Tensors](#13-tensors)
 14. [The neural-net builtins](#14-the-neural-net-builtins)
-15. [Errors and diagnostics](#15-errors-and-diagnostics)
-16. [The output of a program](#16-the-output-of-a-program)
+15. [Gradients: `grad(f, x)`](#15-gradients-gradf-x)
+16. [Errors and diagnostics](#16-errors-and-diagnostics)
+17. [The output of a program](#17-the-output-of-a-program)
 
 ---
 
@@ -33,7 +34,7 @@ installing.
 ```sh
 # from a checkout
 make
-make test          # 108 tests
+make test          # 121 tests
 
 # or install it system-wide (and the editor extension)
 curl -fsSL https://raw.githubusercontent.com/ducky-lang-com/ducky-lang/main/install.sh | sh
@@ -584,6 +585,14 @@ types.
 | `argmax(x)` | `int` | flat index of the largest (first, on a tie) |
 | `mse(p, y)` | `float` | mean squared error, same shapes |
 | `cross_entropy(logits, i)` | `float` | `logsumexp(logits) - logits[i]` |
+| `step(x)` | tensor | `1` where `x > 0`, else `0` — the derivative of `relu` |
+| `matmul_tn(a, b)` | tensor | `aᵀ · b` |
+| `matmul_nt(a, b)` | tensor | `a · bᵀ` |
+| `cross_entropy_grad(logits, i)` | tensor | `softmax(logits) - onehot(i)` |
+
+The last four are the pieces the backward pass of [`grad`](#15-gradients-gradf-x)
+is written with; they are ordinary calls with their shapes checked like any
+other, so a hand-written training loop can use them directly.
 
 ### A forward pass
 
@@ -647,7 +656,75 @@ serve(argmax(t));         // 2
 
 ---
 
-## 15. Errors and diagnostics
+## 15. Gradients: `grad(f, x)`
+
+`grad(f, x)` is the derivative of `f` with respect to `x`. It is a
+compile-time special form: the compiler writes a second function, `f$grad`,
+next to `f` and replaces the call with an ordinary call to it, so what runs
+is plain Ducky with no runtime tape and no bookkeeping.
+
+```duck
+fn loss(w: tensor[2, 3]) -> float {
+    let s = sum(w);
+    send s * s;                     // 2*sum(w) for every element
+}
+
+fn main() -> int {
+    let w: tensor[2, 3] = tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    serve(grad(loss, w));           // [[42, 42, 42], [42, 42, 42]]
+    send 0;
+}
+```
+
+The result has the same type as `x`. For that to work, `f` must:
+
+* take exactly **one** parameter — a `float`, a tensor, or a struct whose
+  fields are floats and tensors;
+* return **`float`**, the quantity being minimised;
+* be a straight line: only `let` statements and a final `send`. No `if`, no
+  loops, no assignment, no `break`, no calls to other functions.
+
+Anything else is a compile error that names the offending statement, so the
+limit shows up where you wrote the code rather than as a wrong number later.
+
+A struct parameter comes back as a struct with a gradient for each of its
+leaves, which is what makes the update step shape-checked at compile time:
+
+```duck
+struct Params {
+    w: tensor[2, 2],
+    b: float,
+}
+
+fn step_loss(p: Params) -> float {
+    let h = matmul(p.w, tensor([2], [1.0, 1.0]));
+    let a = relu(h);
+    send mean(a) + p.b * 0.01;
+}
+
+fn main() -> int {
+    let p = Params(tensor([2, 2], [1.0, 2.0, 3.0, 4.0]), 0.5);
+    let g = grad(step_loss, p);
+    serve(g);                       // Params {w: [[0.5, 0.5], [0.5, 0.5]], b: 0.01}
+    send 0;
+}
+```
+
+What the chain rule covers today: `+ - * /`, unary `-`, `matmul`, `dot`,
+`relu`, `sigmoid`, `tanh`, `gelu`, `sum`, `mean`, `mse`, `cross_entropy`,
+tensor indexing and struct fields. Constants contribute nothing — `zeros`,
+`ones`, `rand`, `tensor(...)` and literals are simply skipped, so a fixed
+input or a fixed target needs no special treatment, and neither does a value
+with no gradient in it (`shape(t)`, `argmax(t)`, `int`, `bool`). A call that
+*could* carry a gradient and has no rule yet — `softmax`, `max`, `min` — is
+rejected with a message naming it rather than silently returning zero.
+
+Two `grad(f, …)` sites in the same program share one `f$grad`. Defining `f`
+in terms of `grad(f, …)` is rejected rather than unrolled.
+
+---
+
+## 16. Errors and diagnostics
 
 Errors carry the file, line and column, the offending source line and a caret:
 
@@ -668,18 +745,24 @@ Nothing is written when compilation fails. A few classes worth knowing:
 | `print("x")` | `'print' does not exist in Ducky - the output builtin is 'serve'` |
 | a wrong tensor shape | `type mismatch: 't' is declared as 'tensor[2]' but the initializer has type 'tensor[2, 3]'` |
 | a non-constant dimension | `tensor dimension 'n' must be a compile-time integer constant` |
+| `grad(f, x)` on a body with an `if` | `grad() cannot differentiate 'f': only 'let' statements and a final 'send' are supported (found 'if')` |
+| `grad(f, x)` calling another function | `grad() cannot differentiate 'f': the call to 'g()' is not a builtin` |
 | index past the end | run time: `ducky: index out of bounds`, exit `127` |
 
 **Redefinition.** A handful of names are reserved and cannot be declared:
 `serve`, `len`, `str`, `input_line`, `float`, `int`, `push`, the `scan_*`
-family and `tensor`. Everything else in the builtin surface is an ordinary
-name — a program may define its own `sum`, `rand`, `max`, `min` or `shape`,
-and **the user's definition wins** at every call site. That is what keeps
-programs written before v0.8.0 compiling unchanged.
+family and `tensor`, plus — since differentiation — `grad`, `step`,
+`matmul_tn`, `matmul_nt` and `cross_entropy_grad`: the last four are real
+builtins, but the gradient code the compiler emits names them, so a program
+defining its own would silently change what `grad` produces. Everything else
+in the builtin surface is an ordinary name — a program may define its own
+`sum`, `rand`, `max`, `min` or `shape`, and **the user's definition wins** at
+every call site. That is what keeps programs written before v0.8.0 compiling
+unchanged.
 
 ---
 
-## 16. The output of a program
+## 17. The output of a program
 
 `serve` writes through raw `write` syscalls, unbuffered, one value per line:
 
@@ -738,8 +821,10 @@ The process exit status is `main`'s return value.
 
 * [SPEC.md](SPEC.md) — the formal grammar, the full builtin table, the
   precedence table and every diagnostic class.
-* [ROADMAP.md](ROADMAP.md) — what v0.8.0 delivered and what comes next:
-  automatic differentiation, optimizers, model files, sockets and HTTP, and
-  the transformer blocks on top of the primitives here.
+* [ROADMAP.md](ROADMAP.md) — what has landed and what comes next:
+  optimizers, model files, sockets and HTTP, and the transformer blocks on
+  top of the primitives here.
 * [examples/tensors.duck](examples/tensors.duck) — everything in §13 and §14
   in one runnable file.
+* [examples/grad.duck](examples/grad.duck) — every shape of §15 in one
+  runnable file.

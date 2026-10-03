@@ -1,0 +1,113 @@
+// grad(f, x) - reverse-mode automatic differentiation. `grad` expands at
+// compile time into an ordinary function that returns the derivative of `f`
+// with respect to its single parameter, over floats, tensors and structs.
+//
+// Every value below was worked out by hand from the derivative of the body.
+
+struct Params {
+    w: tensor[2],
+    b: float,
+}
+
+fn poly(x: float) -> float {
+    let a = x * x;
+    let b = a * 3.0;
+    send b;                 // 3x^2, so 6x at x = 2
+}
+
+fn ratio(x: float) -> float {
+    let n = x + 1.0;
+    let d = x - 1.0;
+    send n / d;             // -2/(x-1)^2, so -0.5 at x = 3
+}
+
+fn energy(w: tensor[2, 3]) -> float {
+    let s = sum(w);
+    send s * s;             // 2*sum(w) for every element
+}
+
+fn layer(a: tensor[2, 2]) -> float {
+    let b = tensor([2, 2], [1.0, 2.0, 3.0, 4.0]);
+    let c = matmul(a, b);
+    let want = tensor([2, 2], [1.0, 0.0, 0.0, 1.0]);
+    send mse(c, want);      // dA = dG * B^T
+}
+
+fn rect(w: tensor[3]) -> float {
+    let h = relu(w);
+    send mean(h);           // step(w)/n, so 0 where w <= 0
+}
+
+fn sig(w: tensor[2]) -> float {
+    let s = sigmoid(w);
+    send sum(s);            // s*(1-s), so 0.25 at 0
+}
+
+fn tnh(w: tensor[2]) -> float {
+    let t = tanh(w);
+    send sum(t);            // 1-t^2, so 1 at 0
+}
+
+fn gel(w: tensor[2]) -> float {
+    let g = gelu(w);
+    send sum(g);            // gelu'(0) = 1/2
+}
+
+fn gelt(w: tensor[2]) -> float {
+    let g = gelu(w);
+    send sum(g) * 0.5;      // 1/2 * gelu'(0) = 1/4
+}
+
+fn dotp(w: tensor[2]) -> float {
+    send dot(w, w);         // 2w
+}
+
+fn pick(w: tensor[3]) -> float {
+    let a = w[0] * w[1];
+    let b = w[2] + a;
+    send b;
+}
+
+fn shorted(w: tensor[2]) -> float {
+    let v = tensor([2], [2.0, 4.0]);
+    let q = w / v;
+    send sum(q);            // 1/v elementwise
+}
+
+fn pmodel(p: Params) -> float {
+    let s = sum(p.w);
+    send s * s + p.b * 2.0; // dW = 2*sum(w), db = 2
+}
+
+fn wrapped(w: tensor[2]) -> float {
+    let q = Params(w, 5.0);
+    let s = sum(q.w);
+    send s;
+}
+
+fn main() -> int {
+    serve(grad(poly, 2.0));          // 12
+    serve(grad(ratio, 3.0));         // -0.5
+    serve(grad(energy, tensor([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])));
+                                      // 42 each
+    serve(grad(layer, tensor([2, 2], [1.0, 2.0, 3.0, 4.0])));
+                                      // [[13, 29], [28.5, 64.5]]
+    serve(grad(rect, tensor([3], [1.0, -2.0, 3.0])));
+                                      // [0.333333333333333, 0, 0.333333333333333]
+    serve(grad(sig, tensor([2], [0.0, 0.0])));   // [0.25, 0.25]
+    serve(grad(tnh, tensor([2], [0.0, 0.0])));   // [1, 1]
+    serve(grad(gel, tensor([2], [0.0, 0.0])));   // [0.5, 0.5]
+    serve(grad(gelt, tensor([2], [0.0, 0.0])));  // [0.25, 0.25]
+    serve(grad(dotp, tensor([2], [2.0, 5.0])));  // [4, 10]
+    serve(grad(pick, tensor([3], [2.0, 5.0, 7.0])));
+                                      // [5, 2, 1]
+    serve(grad(shorted, tensor([2], [3.0, 8.0]))); // [0.5, 0.25]
+    serve(grad(pmodel, Params(tensor([2], [1.0, 2.0]), 3.0)));
+                                      // {w: [6, 6], b: 2}
+    serve(grad(wrapped, tensor([2], [4.0, 9.0]))); // [1, 1]
+
+    // Two call sites share one gradient function.
+    serve(grad(poly, 10.0));         // 60
+
+    send 0;
+}

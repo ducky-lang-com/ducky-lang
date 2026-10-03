@@ -69,7 +69,12 @@ static int is_reserved_builtin_name(const char *name) {
            strcmp(name, "scan_float") == 0 ||
            strcmp(name, "scan_int_line") == 0 ||
            strcmp(name, "scan_float_line") == 0 ||
-           strcmp(name, "tensor") == 0;
+           strcmp(name, "tensor") == 0 ||
+           strcmp(name, "grad") == 0 ||
+           strcmp(name, "step") == 0 ||
+           strcmp(name, "matmul_tn") == 0 ||
+           strcmp(name, "matmul_nt") == 0 ||
+           strcmp(name, "cross_entropy_grad") == 0;
 }
 
 static Func *find_func(Program *prog, const char *name) {
@@ -165,6 +170,8 @@ static int block_returns(Block *b) {
 /* ---------- expressions ---------------------------------------------------- */
 
 static Type check_expr(Expr *e);
+static void check_func(Func *f);
+static Func *grad_build(Func *src, Expr *call);
 
 /* The type obtained by indexing one dimension away from a tensor:
  * `tensor[2, 3][i]` has type `tensor[3]`, and `tensor[3][i]` is a plain
@@ -486,6 +493,57 @@ static Type check_expr(Expr *e) {
 
     case EX_CALL: {
         const char *name = e->call.name;
+
+        /* `grad(f, x)` - the one special form in the language. `grad` is a
+         * reserved name (see is_reserved_builtin_name), so nothing else can
+         * be called `grad`, and the first argument is a *name*, not a value:
+         * it is resolved to a function here, never evaluated. */
+        if (strcmp(name, "grad") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e, "grad() expects exactly 2 arguments, found %d - "
+                            "as in grad(f, x)",
+                    e->call.nargs);
+            }
+            Expr *fnref = e->call.args[0];
+            if (fnref->kind != EX_VAR) {
+                err_node(fnref, "grad() expects the name of a function as its "
+                                "first argument, as in grad(f, x)");
+            }
+            Func *target = find_func(g_prog, fnref->var.name);
+            if (!target) {
+                err_node(fnref, "grad() cannot find a function named '%s'",
+                    fnref->var.name);
+            }
+
+            Type xt = check_expr(e->call.args[1]);
+
+            Func *gf = grad_build(target, e);
+
+            if (xt != gf->params[0]->type) {
+                err_node(e->call.args[1],
+                    "grad() cannot differentiate '%s' with respect to a value "
+                    "of type '%s': '%s' takes '%s'",
+                    target->name, type_name(xt), target->name,
+                    type_name(gf->params[0]->type));
+            }
+
+            /* Rewrite the node in place into an ordinary call to the
+             * synthesized `f$grad`. From here on sema and code generation
+             * treat it as a plain function: the argument is the value being
+             * differentiated and has already been checked. */
+            {
+                Expr **args = arena_alloc(sizeof(Expr *));
+                args[0] = e->call.args[1];
+                e->call.args = args;
+                e->call.nargs = 1;
+            }
+            e->call.name = gf->name;
+            e->call.builtin = BUILTIN_NONE;
+            e->call.fn = gf;
+            e->call.sdef = NULL;
+            e->call.slot = 0;
+            return e->type = gf->ret;
+        }
 
         /* A user definition of the same name wins over the builtin. This is
          * what keeps `sum`, `rand`, `max` and `min` usable as ordinary
@@ -889,6 +947,107 @@ static Type check_expr(Expr *e) {
             return e->type = TY_FLOAT;
         }
 
+        /* Differentiation (v0.9.0). `step` is the derivative of relu and an
+         * activation in its own right; the two transposed products are what
+         * the backward pass of matmul() is written with; and
+         * cross_entropy_grad() is d/dlogits of cross_entropy(). The gradient
+         * code sema emits for grad() refers to all four by name, which is
+         * why they are reserved (see is_reserved_builtin_name). */
+        if (strcmp(name, "step") == 0) {
+            if (e->call.nargs != 1) {
+                err_node(e, "step() expects exactly 1 argument, found %d",
+                         e->call.nargs);
+            }
+            Type t = check_expr(e->call.args[0]);
+            if (!type_is_tensor(t))
+                err_node(e->call.args[0], "step() expects a tensor, found '%s'",
+                         type_name(t));
+            e->call.builtin = BUILTIN_STEP;
+            return e->type = t;
+        }
+
+        if (strcmp(name, "cross_entropy_grad") == 0) {
+            if (e->call.nargs != 2) {
+                err_node(e,
+                         "cross_entropy_grad() expects exactly 2 arguments, found %d",
+                         e->call.nargs);
+            }
+            Type l = check_expr(e->call.args[0]);
+            Type c = check_expr(e->call.args[1]);
+            if (!type_is_tensor(l))
+                err_node(e->call.args[0],
+                         "cross_entropy_grad() expects a tensor of logits, found '%s'",
+                         type_name(l));
+            if (tensor_rank(l) != 1)
+                err_node(e->call.args[0],
+                         "cross_entropy_grad() expects a rank-1 tensor of logits, found '%s'",
+                         type_name(l));
+            if (c != TY_INT)
+                err_node(e->call.args[1],
+                         "cross_entropy_grad() expects the class index as an 'int', found '%s'",
+                         type_name(c));
+            e->call.builtin = BUILTIN_XENT_GRAD;
+            return e->type = l;
+        }
+
+        if (strcmp(name, "matmul_tn") == 0 || strcmp(name, "matmul_nt") == 0) {
+            int tn = strcmp(name, "matmul_tn") == 0;
+            if (e->call.nargs != 2) {
+                err_node(e, "%s() expects exactly 2 arguments, found %d", name,
+                         e->call.nargs);
+            }
+            Type a = check_expr(e->call.args[0]);
+            Type b = check_expr(e->call.args[1]);
+            if (!type_is_tensor(a))
+                err_node(e->call.args[0],
+                         "%s() expects a tensor as its first argument, found '%s'",
+                         name, type_name(a));
+            if (!type_is_tensor(b))
+                err_node(e->call.args[1],
+                         "%s() expects a tensor as its second argument, found '%s'",
+                         name, type_name(b));
+            if (tn && tensor_rank(a) != 2)
+                err_node(e->call.args[0],
+                         "matmul_tn(A, B) computes A^T * B, so A must be rank 2, "
+                         "found '%s'",
+                         type_name(a));
+            if (tensor_rank(a) > 2 || tensor_rank(b) > 2)
+                err_node(e, "%s() needs rank-1 or rank-2 tensors, found '%s' "
+                            "and '%s'",
+                         name, type_name(a), type_name(b));
+            /* A rank-1 operand is read as a single column: tensor[k] has the
+             * same layout as tensor[k, 1], which is what makes both products
+             * below fall out of one kernel per case. */
+            int ra = tensor_rank(a), rb = tensor_rank(b);
+            int m_a = tensor_dim(a, 0);
+            int m_b = tensor_dim(b, 0);
+            int out[2];
+            int outrank;
+            if (tn) {
+                /* A (m,k) transposed against B (m,n) -> (k,n) */
+                if (m_a != m_b)
+                    err_node(e, "matmul_tn(A, B) needs the same leading "
+                                "dimension, found %d in '%s' and %d in '%s'",
+                             m_a, type_name(a), m_b, type_name(b));
+                out[0] = tensor_dim(a, 1);
+                out[1] = rb == 1 ? 1 : tensor_dim(b, 1);
+                outrank = rb;
+            } else {
+                /* A (m,n) against B (k,n) transposed -> (m,k) */
+                int ca = ra == 1 ? 1 : tensor_dim(a, 1);
+                int cb = rb == 1 ? 1 : tensor_dim(b, 1);
+                if (ca != cb)
+                    err_node(e, "matmul_nt(A, B) needs the same number of "
+                                "columns, found %d in '%s' and %d in '%s'",
+                             ca, type_name(a), cb, type_name(b));
+                out[0] = m_a;
+                out[1] = m_b;
+                outrank = 2;
+            }
+            e->call.builtin = tn ? BUILTIN_MATMUL_TN : BUILTIN_MATMUL_NT;
+            return e->type = tensor_type_intern(out, outrank)->type;
+        }
+
         /* A struct constructor: `Point(1, 2)` resolves against the registry
          * (interned by the parser pre-pass), not the function table. */
         StructDecl *sdef = struct_type_lookup(name);
@@ -1176,6 +1335,1003 @@ static void check_func(Func *f) {
             "function '%s' must return a value of type '%s' on all execution paths", f->name,
             type_name(f->ret));
     }
+}
+
+/* ---------- automatic differentiation: grad(f, x) -------------------------
+ *
+ * `grad(f, x)` differentiates the top-level function `f` with respect to `x`
+ * and expands, at compile time, into a call to a synthesized `f$grad`.
+ *
+ * This is reverse mode, but there is no tape. `f` must be straight-line -
+ * only `let` statements and a final `send`, no branches, no loops, no
+ * assignment and no calls to other functions - so every intermediate is
+ * still in scope when the function ends and the derivative of the result can
+ * be written as ordinary expressions over values that are still live. Each
+ * gradient is a real local in the synthesized frame:
+ *
+ *     fn f(p: Params) -> float        fn f$grad(p: Params) -> Params
+ *     { ... }                     =>  { <the forward statements, unchanged>
+ *                                        let g$p_w = zeros([2, 3]);
+ *                                        let g$y = 0.0;
+ *                                        g$y = g$y + 1.0;
+ *                                        g$p_w = g$p_w + ...;
+ *                                        send Params(g$p_w); }
+ *
+ * The statements are visited in reverse, so a gradient is complete before
+ * anything that feeds it is touched. Because the result is an ordinary
+ * function, it goes through exactly the same type checker and the same code
+ * generator as anything the user writes - there is no second evaluation
+ * path to keep honest.
+ *
+ * A struct contributes one gradient local per *leaf* (a `float` or a tensor
+ * reached through it), named `g$<var>_<path>`, which is what lets a parameter
+ * struct be differentiated without ever writing arithmetic on a struct.
+ */
+
+/* ---- node construction --------------------------------------------------- */
+
+/* Expr and Stmt open with the same four members, so one helper can copy the
+ * position of either kind of node. */
+typedef struct {
+    int kind;
+    int line;
+    int col;
+    const SourceFile *src;
+} NodeHead;
+
+#define err_here(at, ...)                                                     \
+    err_at(((const NodeHead *)(at))->src, ((const NodeHead *)(at))->line,     \
+           ((const NodeHead *)(at))->col, __VA_ARGS__)
+
+static Expr *ge(ExprKind k, const void *at) {
+    const NodeHead *h = at;
+    Expr *e = arena_alloc(sizeof(Expr));
+    memset(e, 0, sizeof *e);
+    e->kind = k;
+    e->line = h->line;
+    e->col = h->col;
+    e->src = h->src;
+    return e;
+}
+
+static Stmt *gs(StmtKind k, const void *at) {
+    const NodeHead *h = at;
+    Stmt *s = arena_alloc(sizeof(Stmt));
+    memset(s, 0, sizeof *s);
+    s->kind = k;
+    s->line = h->line;
+    s->col = h->col;
+    s->src = h->src;
+    return s;
+}
+
+static Expr *g_num(double v, const void *at) {
+    Expr *e = ge(EX_FLOAT, at);
+    e->dval = v;
+    e->type = TY_FLOAT;
+    return e;
+}
+
+static Expr *g_int(long v, const void *at) {
+    Expr *e = ge(EX_INT, at);
+    e->ival = v;
+    e->type = TY_INT;
+    return e;
+}
+
+static Expr *g_var(const char *name, Type t, const void *at) {
+    Expr *e = ge(EX_VAR, at);
+    e->var.name = (char *)name;
+    e->type = t;
+    return e;
+}
+
+/* The type of a binary result: a tensor wins whenever one side has one, which
+ * is what `float * tensor` and `tensor * float` both need. sema recomputes it
+ * later; this only has to be good enough for `fit` below. */
+static Expr *g_bin(BinaryOp op, Expr *a, Expr *b) {
+    Expr *e = ge(EX_BINARY, a);
+    e->binary.op = op;
+    e->binary.lhs = a;
+    e->binary.rhs = b;
+    e->type = type_is_tensor(b->type) ? b->type : a->type;
+    return e;
+}
+
+static Expr *g_neg(Expr *a) {
+    Expr *e = ge(EX_UNARY, a);
+    e->unary.op = UOP_NEG;
+    e->unary.operand = a;
+    e->type = a->type;
+    return e;
+}
+
+static Expr **g_args(int n, ...) {
+    Expr **v = arena_alloc((size_t)n * sizeof(Expr *));
+    va_list ap;
+    va_start(ap, n);
+    for (int i = 0; i < n; i++) v[i] = va_arg(ap, Expr *);
+    va_end(ap);
+    return v;
+}
+
+static Expr *g_call(const char *name, Builtin b, Expr **args, int n, Type ret,
+                    const void *at) {
+    Expr *e = ge(EX_CALL, at);
+    e->call.name = (char *)name;
+    e->call.args = args;
+    e->call.nargs = n;
+    e->call.builtin = b;
+    e->type = ret;
+    return e;
+}
+
+static Expr *g_index(Expr *obj, Expr *idx, const void *at) {
+    Expr *e = ge(EX_INDEX, at);
+    e->index.obj = obj;
+    e->index.idx = idx;
+    e->type = type_is_tensor(obj->type) ? tensor_tail(obj->type)
+                                        : type_elem(obj->type);
+    return e;
+}
+
+/* `zeros([2, 3])` written out with literal dimensions: the shape argument of
+ * the tensor builtins has to be a literal, and the shape is already known
+ * statically from the type anyway. */
+static Expr *g_fill(Type t, double value, const void *at) {
+    if (!type_is_tensor(t)) return g_num(value, at); /* a scalar seed */
+    TensorShape *ts = type_shape(t);
+    Expr **dims = arena_alloc((size_t)ts->rank * sizeof(Expr *));
+    for (int i = 0; i < ts->rank; i++) dims[i] = g_int(ts->dims[i], at);
+    Expr *shape = ge(EX_ARRAY, at);
+    shape->array.elems = dims;
+    shape->array.nelems = ts->rank;
+    shape->type = type_array_of(TY_INT);
+    return g_call(value == 0.0 ? "zeros" : "ones",
+                  value == 0.0 ? BUILTIN_ZEROS : BUILTIN_ONES, g_args(1, shape),
+                  1, t, at);
+}
+
+/* ---- deep copy ----------------------------------------------------------- */
+
+/* The forward statements of `f` are copied rather than shared: they get their
+ * stack slots assigned inside the new frame, and `f`'s own slots must not be
+ * moved by that. */
+static Expr *copy_expr(const Expr *e) {
+    if (!e) return NULL;
+    Expr *c = ge(e->kind, e);
+    c->type = e->type;
+    switch (e->kind) {
+    case EX_INT:   c->ival = e->ival; break;
+    case EX_FLOAT: c->dval = e->dval; break;
+    case EX_BOOL:  c->bval = e->bval; break;
+    case EX_STRING: c->sval = e->sval; break;
+    case EX_VAR:
+        c->var.name = e->var.name;
+        c->var.offset = e->var.offset;
+        break;
+    case EX_UNARY:
+        c->unary.op = e->unary.op;
+        c->unary.operand = copy_expr(e->unary.operand);
+        break;
+    case EX_BINARY:
+        c->binary.op = e->binary.op;
+        c->binary.lhs = copy_expr(e->binary.lhs);
+        c->binary.rhs = copy_expr(e->binary.rhs);
+        break;
+    case EX_CALL:
+        c->call.name = e->call.name;
+        c->call.nargs = e->call.nargs;
+        if (e->call.nargs) {
+            c->call.args = arena_alloc((size_t)e->call.nargs * sizeof(Expr *));
+            for (int i = 0; i < e->call.nargs; i++)
+                c->call.args[i] = copy_expr(e->call.args[i]);
+        }
+        c->call.fn = e->call.fn;
+        c->call.builtin = e->call.builtin;
+        c->call.sdef = e->call.sdef;
+        c->call.slot = 0; /* sema gives the copy its own hidden slot */
+        break;
+    case EX_ARRAY:
+        c->array.nelems = e->array.nelems;
+        if (e->array.nelems) {
+            c->array.elems =
+                arena_alloc((size_t)e->array.nelems * sizeof(Expr *));
+            for (int i = 0; i < e->array.nelems; i++)
+                c->array.elems[i] = copy_expr(e->array.elems[i]);
+        }
+        c->array.slot = 0;
+        break;
+    case EX_INDEX:
+        c->index.obj = copy_expr(e->index.obj);
+        c->index.idx = copy_expr(e->index.idx);
+        break;
+    case EX_FIELD:
+        c->field.obj = copy_expr(e->field.obj);
+        c->field.name = e->field.name;
+        c->field.offset = e->field.offset;
+        break;
+    }
+    return c;
+}
+
+/* Only `let` statements are ever copied: grad_validate has already rejected
+ * everything else in the body of a function being differentiated. */
+static Stmt *copy_stmt(const Stmt *s) {
+    Stmt *c = gs(s->kind, s);
+    c->let.name = s->let.name;
+    c->let.ann = s->let.ann;
+    c->let.has_ann = s->let.has_ann;
+    c->let.init = copy_expr(s->let.init);
+    c->let.offset = 0; /* sema gives the copy its own slot */
+    return c;
+}
+
+/* ---- gradient slots ------------------------------------------------------ */
+
+#define GRAD_MAX_SLOTS 512
+
+typedef struct {
+    const char *var; /* the variable being differentiated          */
+    const char *path; /* "" for the value itself, "w" or "inner.x" */
+    const char *name; /* the local that holds the gradient: "g$p_w" */
+    Type type;
+} GSlot;
+
+static GSlot g_gslot[GRAD_MAX_SLOTS];
+static int g_ngslot;
+
+/* A value that can carry a gradient at all. */
+static int is_diff_leaf(Type t) { return t == TY_FLOAT || type_is_tensor(t); }
+
+/* `a.b.c` joined by `head`, for addressing a leaf through a struct. */
+static const char *path_join(const char *head, const char *tail) {
+    size_t a = strlen(head), b = strlen(tail);
+    char *p = arena_alloc(a + b + 2);
+    memcpy(p, head, a);
+    p[a] = '.';
+    memcpy(p + a + 1, tail, b + 1);
+    return p;
+}
+
+/* The local that carries the gradient of `var`'s leaf at `path`. Dots become
+ * underscores because a stack slot is named with a plain identifier. */
+static const char *grad_slot_name(const char *var, const char *path) {
+    size_t lv = strlen(var), lp = strlen(path);
+    char *p = arena_alloc(lv + lp + 4);
+    char *w = p;
+    *w++ = 'g';
+    *w++ = '$';
+    memcpy(w, var, lv);
+    w += lv;
+    if (lp) {
+        *w++ = '_';
+        for (size_t i = 0; i < lp; i++) *w++ = (path[i] == '.') ? '_' : path[i];
+    }
+    *w = '\0';
+    return p;
+}
+
+static void add_gslot(const char *var, const char *path, Type t,
+                      const void *at) {
+    for (int i = 0; i < g_ngslot; i++)
+        if (strcmp(g_gslot[i].var, var) == 0 &&
+            strcmp(g_gslot[i].path, path) == 0)
+            return;
+    if (g_ngslot >= GRAD_MAX_SLOTS)
+        err_here(at, "grad() cannot differentiate this: more than %d gradient "
+                     "values are needed",
+                 GRAD_MAX_SLOTS);
+    GSlot *s = &g_gslot[g_ngslot++];
+    s->var = var;
+    s->path = arena_strndup(path, strlen(path));
+    s->name = grad_slot_name(var, path);
+    s->type = t;
+}
+
+/* One slot per leaf reachable through `var`. `strict` is set for the
+ * parameter being differentiated: there the gradient has to come back in the
+ * same type, so a field with no gradient is an error rather than a hole. */
+static void add_gleaves(const char *var, const char *path, Type t,
+                        const void *at, int strict) {
+    if (type_is_struct(t)) {
+        StructDecl *sd = struct_type_decl(t);
+        for (int i = 0; i < sd->nfields; i++) {
+            const char *sub = path[0] ? path_join(path, sd->fields[i]->name)
+                                      : sd->fields[i]->name;
+            add_gleaves(var, sub, sd->fields[i]->type, at, strict);
+        }
+        return;
+    }
+    if (is_diff_leaf(t)) {
+        add_gslot(var, path, t, at);
+        return;
+    }
+    if (strict)
+        err_here(at, "grad() cannot differentiate with respect to '%s' of type "
+                     "'%s' - only floats, tensors and structs of those",
+                 path[0] ? path : var, type_name(t));
+}
+
+static int gslot_find(const char *var, const char *path) {
+    for (int i = 0; i < g_ngslot; i++)
+        if (strcmp(g_gslot[i].var, var) == 0 &&
+            strcmp(g_gslot[i].path, path) == 0)
+            return i;
+    return -1;
+}
+
+/* ---- the reverse pass ---------------------------------------------------- */
+
+typedef struct {
+    Expr *target;  /* the gradient local (or element of one) being updated */
+    Expr *contrib; /* what is added to it                                  */
+} GItem;
+
+typedef struct {
+    GItem *v;
+    int n, cap;
+} GList;
+
+static void glist(GList *l, Expr *target, Expr *contrib) {
+    if (!target || !contrib) return;
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 8;
+        GItem *nv = arena_alloc((size_t)l->cap * sizeof(GItem));
+        if (l->n) memcpy(nv, l->v, (size_t)l->n * sizeof(GItem));
+        l->v = nv;
+    }
+    l->v[l->n].target = target;
+    l->v[l->n].contrib = contrib;
+    l->n++;
+}
+
+/* One contribution to a struct-valued expression, addressed by the leaf. */
+typedef struct {
+    const char *path;
+    Expr *contrib;
+} SItem;
+
+/* Reshape a contribution to the type of the slot it is added to. `t + 2.0`
+ * gives the tensor and the scalar each a gradient, and the scalar's is the
+ * sum over the elements. */
+static Expr *fit(Expr *c, Type want, const void *at) {
+    if (c->type == want) return c;
+    if (want == TY_FLOAT && type_is_tensor(c->type))
+        return g_call("sum", BUILTIN_SUM, g_args(1, c), 1, TY_FLOAT, at);
+    err_here(at, "grad() cannot build a gradient of type '%s' (built one of "
+                 "type '%s')",
+             type_name(want), type_name(c->type));
+    return c;
+}
+
+/* Is there anything below `e` that could receive a gradient at all? Used to
+ * skip building a contribution for `t * 2.0`'s constant half, which would
+ * otherwise be computed and thrown away. */
+static int has_diff_leaf(Expr *e) {
+    if (!e) return 0;
+    switch (e->kind) {
+    case EX_VAR: return is_diff_leaf(e->type) || type_is_struct(e->type);
+    /* Indexing an array cannot receive a gradient, but it must not be
+     * skipped either: `a[0] + a[1]` would otherwise quietly differentiate to
+     * zero instead of reporting that arrays are not supported. Saying "yes"
+     * here routes it to grad_target, which raises the diagnostic. */
+    case EX_INDEX: return has_diff_leaf(e->index.obj) ||
+                            type_is_array(e->index.obj->type);
+    case EX_FIELD: return has_diff_leaf(e->field.obj);
+    case EX_UNARY: return has_diff_leaf(e->unary.operand);
+    case EX_BINARY:
+        return has_diff_leaf(e->binary.lhs) || has_diff_leaf(e->binary.rhs);
+    case EX_ARRAY:
+        for (int i = 0; i < e->array.nelems; i++)
+            if (has_diff_leaf(e->array.elems[i])) return 1;
+        return 0;
+    case EX_CALL:
+        for (int i = 0; i < e->call.nargs; i++)
+            if (has_diff_leaf(e->call.args[i])) return 1;
+        return 0;
+    default: return 0;
+    }
+}
+
+/* The expression that names the gradient of a leaf-valued expression: the
+ * local `g$...`, or a subscript of it when the expression is an element or a
+ * slice of a tensor. NULL when nothing below it can receive a gradient (a
+ * constant, or a `const` that was already folded into a literal). */
+static Expr *grad_target(Expr *e, const void *at) {
+    switch (e->kind) {
+    case EX_VAR: {
+        int i = gslot_find(e->var.name, "");
+        if (i < 0) return NULL;
+        return g_var(g_gslot[i].name, g_gslot[i].type, at);
+    }
+    case EX_FIELD: {
+        const Expr *chain[24];
+        int n = 0;
+        const Expr *cur = e;
+        while (cur && cur->kind == EX_FIELD && n < 24) {
+            chain[n++] = cur;
+            cur = cur->field.obj;
+        }
+        if (!cur || cur->kind != EX_VAR) return NULL;
+        const char *path = "";
+        for (int i = n - 1; i >= 0; i--)
+            path = path[0] ? path_join(path, chain[i]->field.name)
+                           : chain[i]->field.name;
+        int k = gslot_find(cur->var.name, path);
+        if (k < 0) return NULL;
+        return g_var(g_gslot[k].name, g_gslot[k].type, at);
+    }
+    case EX_INDEX: {
+        if (type_is_array(e->index.obj->type))
+            err_here(at, "grad() cannot differentiate an array - use a tensor");
+        Expr *base = grad_target(e->index.obj, at);
+        if (!base) return NULL;
+        return g_index(base, copy_expr(e->index.idx), at);
+    }
+    default: return NULL;
+    }
+}
+
+static void rev_at(Expr *e, const char *path, Expr *g, GList *out);
+static void rev_leaf(Expr *e, Expr *g, GList *out);
+
+/* The gradient of a struct-valued expression arrives one leaf at a time:
+ * there is no arithmetic on structs to combine them with. */
+static void rev_struct(Expr *e, const SItem *items, int n, GList *out) {
+    if (e->kind == EX_VAR) {
+        for (int i = 0; i < n; i++) {
+            int k = gslot_find(e->var.name, items[i].path);
+            if (k >= 0)
+                glist(out, g_var(g_gslot[k].name, g_gslot[k].type, e),
+                      items[i].contrib);
+        }
+        return;
+    }
+    if (e->kind == EX_FIELD) {
+        SItem sub[24];
+        int m = 0;
+        for (int i = 0; i < n && m < 24; i++) {
+            sub[m].path = items[i].path[0]
+                              ? path_join(e->field.name, items[i].path)
+                              : e->field.name;
+            sub[m].contrib = items[i].contrib;
+            m++;
+        }
+        rev_struct(e->field.obj, sub, m, out);
+        return;
+    }
+    if (e->kind == EX_CALL && e->call.sdef) {
+        StructDecl *sd = e->call.sdef;
+        for (int i = 0; i < n; i++) {
+            const char *dot = strchr(items[i].path, '.');
+            char head[64];
+            if (dot) {
+                size_t k = (size_t)(dot - items[i].path);
+                memcpy(head, items[i].path, k);
+                head[k] = '\0';
+            } else {
+                snprintf(head, sizeof head, "%s", items[i].path);
+            }
+            int idx = -1;
+            for (int f = 0; f < sd->nfields; f++)
+                if (strcmp(sd->fields[f]->name, head) == 0) {
+                    idx = f;
+                    break;
+                }
+            if (idx < 0) continue;
+            rev_at(e->call.args[idx], dot ? dot + 1 : "", items[i].contrib,
+                   out);
+        }
+        return;
+    }
+    /* Anything else has no structure to descend into. */
+}
+
+static void rev_at(Expr *e, const char *path, Expr *g, GList *out) {
+    if (!e) return;
+    if (type_is_struct(e->type)) {
+        SItem it;
+        it.path = path;
+        it.contrib = g;
+        rev_struct(e, &it, 1, out);
+        return;
+    }
+    if (path[0])
+        err_here(e, "grad() internal error: a gradient path reached a value "
+                    "of type '%s'",
+                 type_name(e->type));
+    rev_leaf(e, g, out);
+}
+
+/* The chain rule at one node: `g` is d(result)/d(e), and the call adds
+ * d(result)/d(operand) for each operand that can carry one. */
+static void rev_leaf(Expr *e, Expr *g, GList *out) {
+    if (!e || !is_diff_leaf(e->type)) return;
+
+    switch (e->kind) {
+    case EX_VAR:
+    case EX_FIELD:
+    case EX_INDEX: {
+        Expr *t = grad_target(e, e);
+        if (t) glist(out, t, g);
+        return;
+    }
+
+    case EX_UNARY:
+        if (e->unary.op == UOP_NEG && has_diff_leaf(e->unary.operand))
+            rev_leaf(e->unary.operand, g_neg(g), out);
+        return;
+
+    case EX_BINARY: {
+        Expr *a = e->binary.lhs;
+        Expr *b = e->binary.rhs;
+        switch (e->binary.op) {
+        case BOP_ADD:
+            if (has_diff_leaf(a)) rev_leaf(a, fit(g, a->type, e), out);
+            if (has_diff_leaf(b)) rev_leaf(b, fit(g, b->type, e), out);
+            return;
+        case BOP_SUB:
+            if (has_diff_leaf(a)) rev_leaf(a, fit(g, a->type, e), out);
+            if (has_diff_leaf(b)) rev_leaf(b, fit(g_neg(g), b->type, e), out);
+            return;
+        case BOP_MUL:
+            if (has_diff_leaf(a))
+                rev_leaf(a, fit(g_bin(BOP_MUL, g, copy_expr(b)), a->type, e),
+                         out);
+            if (has_diff_leaf(b))
+                rev_leaf(b, fit(g_bin(BOP_MUL, g, copy_expr(a)), b->type, e),
+                         out);
+            return;
+        case BOP_DIV:
+            if (has_diff_leaf(a))
+                rev_leaf(a, fit(g_bin(BOP_DIV, g, copy_expr(b)), a->type, e),
+                         out);
+            if (has_diff_leaf(b)) {
+                Expr *bb = g_bin(BOP_MUL, copy_expr(b), copy_expr(b));
+                Expr *r =
+                    g_neg(g_bin(BOP_DIV, g_bin(BOP_MUL, g, copy_expr(a)), bb));
+                rev_leaf(b, fit(r, b->type, e), out);
+            }
+            return;
+        default:
+            break; /* comparisons and bitwise operators are not leaves */
+        }
+        break;
+    }
+
+    case EX_CALL: {
+        Builtin b = e->call.builtin;
+        Expr *a0 = e->call.nargs > 0 ? e->call.args[0] : NULL;
+        Expr *a1 = e->call.nargs > 1 ? e->call.args[1] : NULL;
+
+        switch (b) {
+        case BUILTIN_MATMUL: {
+            /* A (m,k) * B (k,n) = C (m,n), G (m,n):
+             *   dA = G * B^T      dB = A^T * G
+             * A rank-1 operand is one column, which is exactly what both
+             * products already assume. */
+            Expr *A = a0, *B = a1;
+            rev_leaf(A, g_call("matmul_nt", BUILTIN_MATMUL_NT,
+                               g_args(2, copy_expr(g), copy_expr(B)), 2, A->type,
+                               e),
+                     out);
+            rev_leaf(B, g_call("matmul_tn", BUILTIN_MATMUL_TN,
+                               g_args(2, copy_expr(A), copy_expr(g)), 2, B->type,
+                               e),
+                     out);
+            return;
+        }
+        case BUILTIN_DOT: {
+            Expr *A = a0, *B = a1;
+            if (has_diff_leaf(A))
+                rev_leaf(A, fit(g_bin(BOP_MUL, g, copy_expr(B)), A->type, e),
+                         out);
+            if (has_diff_leaf(B))
+                rev_leaf(B, fit(g_bin(BOP_MUL, g, copy_expr(A)), B->type, e),
+                         out);
+            return;
+        }
+        case BUILTIN_RELU: {
+            Expr *step = g_call("step", BUILTIN_STEP, g_args(1, copy_expr(a0)),
+                                1, a0->type, e);
+            rev_leaf(a0, g_bin(BOP_MUL, g, step), out);
+            return;
+        }
+        case BUILTIN_SIGMOID: {
+            Expr *s = g_call("sigmoid", BUILTIN_SIGMOID,
+                             g_args(1, copy_expr(a0)), 1, a0->type, e);
+            Expr *d = g_bin(BOP_MUL, s, g_bin(BOP_SUB, g_num(1.0, e),
+                                              copy_expr(s)));
+            rev_leaf(a0, g_bin(BOP_MUL, g, d), out);
+            return;
+        }
+        case BUILTIN_TANH: {
+            Expr *s =
+                g_call("tanh", BUILTIN_TANH, g_args(1, copy_expr(a0)), 1,
+                       a0->type, e);
+            Expr *d = g_bin(BOP_SUB, g_num(1.0, e),
+                            g_bin(BOP_MUL, copy_expr(s), copy_expr(s)));
+            rev_leaf(a0, g_bin(BOP_MUL, g, d), out);
+            return;
+        }
+        case BUILTIN_GELU: {
+            /* gelu(x) = 0.5 x (1 + tanh(u)), u = c (x + k x^3)
+             *   d/dx = 0.5 (1 + t) + 0.5 x (1 - t^2) c (1 + 3 k x^2)
+             * which is then scaled by the gradient arriving from above. */
+            Expr *x = copy_expr(a0);
+            const double k = 0.044715;
+            const double c = 0.79788456080286535588;
+            Expr *u = g_bin(
+                BOP_MUL, g_num(c, e),
+                g_bin(BOP_ADD, copy_expr(x),
+                      g_bin(BOP_MUL, g_num(k, e),
+                            g_bin(BOP_MUL, copy_expr(x),
+                                  g_bin(BOP_MUL, copy_expr(x),
+                                        copy_expr(x))))));
+            Expr *t = g_call("tanh", BUILTIN_TANH, g_args(1, u), 1, a0->type, e);
+            Expr *head = g_bin(BOP_MUL, g_num(0.5, e),
+                               g_bin(BOP_ADD, g_num(1.0, e), copy_expr(t)));
+            Expr *tail = g_bin(
+                BOP_MUL, g_num(0.5, e),
+                g_bin(BOP_MUL, copy_expr(x),
+                      g_bin(BOP_MUL,
+                            g_bin(BOP_SUB, g_num(1.0, e),
+                                  g_bin(BOP_MUL, copy_expr(t), copy_expr(t))),
+                            g_bin(BOP_MUL, g_num(c, e),
+                                  g_bin(BOP_ADD, g_num(1.0, e),
+                                        g_bin(BOP_MUL, g_num(3.0 * k, e),
+                                              g_bin(BOP_MUL, copy_expr(x),
+                                                    copy_expr(x))))))));
+            rev_leaf(a0, g_bin(BOP_MUL, g, g_bin(BOP_ADD, head, tail)), out);
+            return;
+        }
+        case BUILTIN_SUM:
+            /* d sum(t) / dt = 1 for every element. */
+            rev_leaf(a0, g_bin(BOP_MUL, g, g_fill(a0->type, 1.0, e)), out);
+            return;
+        case BUILTIN_MEAN: {
+            long n = tensor_nelems(a0->type);
+            Expr *scale = g_bin(BOP_DIV, g, g_num((double)n, e));
+            rev_leaf(a0, g_bin(BOP_MUL, scale, g_fill(a0->type, 1.0, e)), out);
+            return;
+        }
+        case BUILTIN_MSE: {
+            /* mse = sum((p - t)^2) / n, so dm/dp = 2 (p - t) / n and the
+             * target takes the negative of the same thing. */
+            Expr *p = a0, *t = a1;
+            long n = tensor_nelems(p->type);
+            Expr *diff = g_bin(BOP_SUB, copy_expr(p), copy_expr(t));
+            Expr *core = g_bin(
+                BOP_MUL, g_bin(BOP_MUL, g, g_num(2.0 / (double)n, e)),
+                copy_expr(diff));
+            if (has_diff_leaf(p)) rev_leaf(p, core, out);
+            if (has_diff_leaf(t)) rev_leaf(t, g_neg(copy_expr(core)), out);
+            return;
+        }
+        case BUILTIN_CROSS_ENTROPY: {
+            /* cross_entropy = logsumexp(logits) - logits[class], whose
+             * derivative is softmax(logits) - onehot(class). */
+            Expr *logits = a0;
+            Expr *d = g_call("cross_entropy_grad", BUILTIN_XENT_GRAD,
+                             g_args(2, copy_expr(logits), copy_expr(a1)), 2,
+                             logits->type, e);
+            rev_leaf(logits, g_bin(BOP_MUL, g, d), out);
+            return;
+        }
+        case BUILTIN_TENSOR:
+        case BUILTIN_ZEROS:
+        case BUILTIN_ONES:
+        case BUILTIN_RAND:
+        case BUILTIN_FLOAT:
+        case BUILTIN_SCAN_FLOAT:
+        case BUILTIN_SCAN_FLOAT_LINE:
+            return; /* a constant: nothing below it can move */
+
+        default:
+            break;
+        }
+        err_here(e, "grad() cannot differentiate the call to '%s()'",
+                 e->call.name);
+        return;
+    }
+
+    default:
+        return; /* a literal carries no gradient */
+    }
+
+    err_here(e, "grad() cannot differentiate the '%s' operator",
+             binary_op_name(e->binary.op));
+}
+
+/* ---- validation ---------------------------------------------------------- */
+
+static const char *stmt_word(Stmt *s) {
+    switch (s->kind) {
+    case ST_LET: return "'let'";
+    case ST_ASSIGN: return "an assignment";
+    case ST_EXPR: return "a statement that is not 'let'";
+    case ST_IF: return "'if'";
+    case ST_WHILE: return "'while'";
+    case ST_FOR: return "'for'";
+    case ST_BREAK: return "'break'";
+    case ST_CONTINUE: return "'continue'";
+    case ST_RETURN: return "'send'";
+    case ST_BLOCK: return "a nested block";
+    }
+    return "this";
+}
+
+static void grad_validate_expr(Expr *e, Func *f) {
+    if (!e) return;
+    switch (e->kind) {
+    case EX_UNARY:
+        grad_validate_expr(e->unary.operand, f);
+        return;
+    case EX_BINARY:
+        grad_validate_expr(e->binary.lhs, f);
+        grad_validate_expr(e->binary.rhs, f);
+        return;
+    case EX_ARRAY:
+        for (int i = 0; i < e->array.nelems; i++)
+            grad_validate_expr(e->array.elems[i], f);
+        return;
+    case EX_INDEX:
+        grad_validate_expr(e->index.obj, f);
+        grad_validate_expr(e->index.idx, f);
+        return;
+    case EX_FIELD:
+        grad_validate_expr(e->field.obj, f);
+        return;
+    case EX_CALL:
+        if (e->call.builtin == BUILTIN_NONE && !e->call.sdef)
+            err_at(e->src, e->line, e->col,
+                   "grad() cannot differentiate '%s': the call to '%s()' is not "
+                   "a builtin",
+                   f->name, e->call.name);
+        for (int i = 0; i < e->call.nargs; i++)
+            grad_validate_expr(e->call.args[i], f);
+        return;
+    default:
+        return;
+    }
+}
+
+static void grad_validate(Func *f) {
+    Block *b = f->body;
+    if (b->nstmts == 0)
+        err_at(f->src, b->line, b->col,
+               "grad() cannot differentiate '%s': its body is empty", f->name);
+    for (int i = 0; i < b->nstmts; i++) {
+        Stmt *s = b->stmts[i];
+        int last = (i == b->nstmts - 1);
+        if (s->kind == ST_LET) {
+            grad_validate_expr(s->let.init, f);
+        } else if (s->kind == ST_RETURN && last && s->value) {
+            grad_validate_expr(s->value, f);
+        } else {
+            err_at(s->src, s->line, s->col,
+                   "grad() cannot differentiate '%s': only 'let' statements "
+                   "and a final 'send' are supported (found %s)",
+                   f->name, stmt_word(s));
+        }
+    }
+    if (b->stmts[b->nstmts - 1]->kind != ST_RETURN)
+        err_at(f->src, b->line, b->col,
+               "grad() cannot differentiate '%s': it must end in a 'send'", f->name);
+}
+
+/* ---- building the gradient function ------------------------------------- */
+
+typedef struct {
+    Stmt **v;
+    int n, cap;
+} GBody;
+
+static void body_push(GBody *bd, Stmt *s) {
+    if (bd->n == bd->cap) {
+        bd->cap = bd->cap ? bd->cap * 2 : 32;
+        Stmt **nv = arena_alloc((size_t)bd->cap * sizeof(Stmt *));
+        if (bd->n) memcpy(nv, bd->v, (size_t)bd->n * sizeof(Stmt *));
+        bd->v = nv;
+    }
+    bd->v[bd->n++] = s;
+}
+
+/* One `target = target + contrib;` per accumulated contribution. The
+ * contribution is copied: one `g` can appear in two contributions (both
+ * halves of `a * b` need it), and two statements must not share a subtree. */
+static void emit_grads(const GList *l, GBody *bd) {
+    for (int i = 0; i < l->n; i++) {
+        Expr *target = l->v[i].target;
+        Stmt *st = gs(ST_ASSIGN, target);
+        st->assign.value = g_bin(BOP_ADD, copy_expr(target),
+                                 copy_expr(l->v[i].contrib));
+        if (target->kind == EX_VAR) {
+            st->assign.name = target->var.name;
+            st->assign.target = NULL;
+        } else {
+            st->assign.name = NULL;
+            st->assign.target = target;
+        }
+        body_push(bd, st);
+    }
+}
+
+/* The gradient of the parameter itself: the local for a float or a tensor,
+ * a construction of the struct's gradient leaves for a parameter struct. */
+static Expr *grad_result(Type t, const char *var, const char *path,
+                         const void *at) {
+    if (type_is_struct(t)) {
+        StructDecl *sd = struct_type_decl(t);
+        Expr **args = arena_alloc((size_t)sd->nfields * sizeof(Expr *));
+        for (int i = 0; i < sd->nfields; i++) {
+            const char *sub = path[0] ? path_join(path, sd->fields[i]->name)
+                                      : sd->fields[i]->name;
+            args[i] = grad_result(sd->fields[i]->type, var, sub, at);
+        }
+        Expr *e = ge(EX_CALL, at);
+        e->call.name = (char *)struct_type_name(t);
+        e->call.args = args;
+        e->call.nargs = sd->nfields;
+        e->call.builtin = BUILTIN_NONE;
+        e->call.sdef = sd;
+        e->type = t;
+        return e;
+    }
+    int k = gslot_find(var, path);
+    if (k < 0)
+        err_here(at, "grad() has no gradient for '%s'",
+                 path[0] ? path : var);
+    return g_var(g_gslot[k].name, g_gslot[k].type, at);
+}
+
+/* Functions currently being differentiated: a `grad` inside a `grad` is
+ * bounded, and a cycle between two of them is reported instead of looping. */
+static Func *g_grad_active[16];
+static int g_grad_nactive;
+
+static Func *grad_build(Func *src, Expr *call) {
+    if (src->is_extern)
+        err_here(call, "grad() cannot differentiate '%s': it is declared "
+                       "'extern'",
+                 src->name);
+    if (src->nparams != 1)
+        err_here(call, "grad() expects '%s' to take exactly 1 parameter, found %d",
+                 src->name, src->nparams);
+    if (src->ret != TY_FLOAT)
+        err_here(call,
+                 "grad() expects '%s' to return 'float' - the quantity being "
+                 "minimised, found '%s'",
+                 src->name, type_name(src->ret));
+
+    /* Already built: two call sites share one gradient function. */
+    char gname[192];
+    snprintf(gname, sizeof gname, "%s$grad", src->name);
+    Func *cached = find_func(g_prog, gname);
+    if (cached) return cached;
+
+    for (int i = 0; i < g_grad_nactive; i++)
+        if (g_grad_active[i] == src)
+            err_here(call, "grad() cannot differentiate '%s': it is already "
+                           "being differentiated (definitions must not be "
+                           "recursive)",
+                     src->name);
+    if (g_grad_nactive >= 16)
+        err_here(call, "grad() is nested more than 16 deep");
+    g_grad_active[g_grad_nactive++] = src;
+
+    /* `src` may sit later in the program than its caller, so it may not have
+     * been checked yet; the body below is only readable once it has. The
+     * caller's own analysis is parked and restored around it. */
+    Func *save_fn = g_fn;
+    Scope *save_scope = g_scope;
+    int save_slots = g_slots;
+    int save_loops = g_loops;
+    g_fn = NULL;
+    g_scope = NULL;
+    g_slots = 0;
+    g_loops = 0;
+    check_func(src);
+    g_fn = save_fn;
+    g_scope = save_scope;
+    g_slots = save_slots;
+    g_loops = save_loops;
+
+    grad_validate(src);
+
+    Param *param = src->params[0];
+    if (!is_diff_leaf(param->type) && !type_is_struct(param->type))
+        err_here(call,
+                 "grad() cannot differentiate with respect to '%s' of type "
+                 "'%s' - only floats, tensors and structs of those",
+                 param->name, type_name(param->type));
+
+    /* Every gradient local that could be needed, declared up front so the
+     * reverse walk can write to any of them in any order. */
+    g_ngslot = 0;
+    add_gleaves(param->name, "", param->type, call, 1);
+    Block *fb = src->body;
+    Stmt **lets = arena_alloc((size_t)fb->nstmts * sizeof(Stmt *));
+    int nlets = 0;
+    for (int i = 0; i < fb->nstmts; i++) {
+        Stmt *s = fb->stmts[i];
+        if (s->kind != ST_LET) continue;
+        lets[nlets++] = s;
+        add_gleaves(s->let.name, "",
+                    s->let.has_ann ? s->let.ann : s->let.init->type, s, 0);
+    }
+
+    GBody bd = {0};
+
+    /* Forward: the original statements, unchanged, minus the `send`. */
+    for (int i = 0; i < nlets; i++) body_push(&bd, copy_stmt(lets[i]));
+
+    /* Gradient storage. */
+    for (int i = 0; i < g_ngslot; i++) {
+        Stmt *st = gs(ST_LET, call);
+        st->let.name = (char *)g_gslot[i].name;
+        st->let.has_ann = 0;
+        st->let.ann = TY_VOID;
+        st->let.init = g_fill(g_gslot[i].type, 0.0, call);
+        body_push(&bd, st);
+    }
+
+    /* Backward. The seed is d(loss)/d(loss) = 1. */
+    Stmt *ret = fb->stmts[fb->nstmts - 1];
+    GList list = {0};
+    rev_leaf(ret->value, g_num(1.0, call), &list);
+    emit_grads(&list, &bd);
+
+    /* Then each binding, in reverse, so a gradient is finished before
+     * anything that feeds it is touched. */
+    for (int i = nlets - 1; i >= 0; i--) {
+        Stmt *s = lets[i];
+        GList l2 = {0};
+        int nitems = 0;
+        SItem *items = arena_alloc((size_t)g_ngslot * sizeof(SItem));
+        for (int k = 0; k < g_ngslot && nitems < GRAD_MAX_SLOTS; k++) {
+            if (strcmp(g_gslot[k].var, s->let.name) != 0) continue;
+            items[nitems].path = g_gslot[k].path;
+            items[nitems].contrib = g_var(g_gslot[k].name, g_gslot[k].type, s);
+            nitems++;
+        }
+        for (int k = 0; k < nitems; k++)
+            rev_at(s->let.init, items[k].path, items[k].contrib, &l2);
+        emit_grads(&l2, &bd);
+    }
+
+    Stmt *send = gs(ST_RETURN, call);
+    send->value = grad_result(param->type, param->name, "", call);
+    body_push(&bd, send);
+
+    Block *nb = arena_alloc(sizeof(Block));
+    nb->stmts = bd.v;
+    nb->nstmts = bd.n;
+    nb->line = call->line;
+    nb->col = call->col;
+
+    Func *gf = arena_alloc(sizeof(Func));
+    gf->name = arena_strndup(gname, strlen(gname));
+    gf->params = src->params;
+    gf->nparams = 1;
+    gf->ret = param->type;
+    gf->body = nb;
+    gf->line = src->line;
+    gf->col = src->col;
+    gf->src = src->src;
+    gf->frame_size = 0;
+    gf->is_extern = 0;
+    gf->is_variadic = 0;
+
+    Func **nf = arena_alloc((size_t)(g_prog->nfuncs + 1) * sizeof(Func *));
+    if (g_prog->nfuncs)
+        memcpy(nf, g_prog->funcs, (size_t)g_prog->nfuncs * sizeof(Func *));
+    nf[g_prog->nfuncs++] = gf;
+    g_prog->funcs = nf;
+
+    g_grad_nactive--;
+    return gf;
 }
 
 /* ---------- entry point ------------------------------------------------------ */

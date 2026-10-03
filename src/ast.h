@@ -191,7 +191,17 @@ typedef enum {
 
     /* losses */
     BUILTIN_MSE,           /* mse(pred, target) -> float, same shape */
-    BUILTIN_CROSS_ENTROPY  /* cross_entropy(logits[N], class) -> float */
+    BUILTIN_CROSS_ENTROPY, /* cross_entropy(logits[N], class) -> float */
+
+    /* Differentiation (v0.9.0). Every one of these is either a step that
+     * grad() needs and that is worth having in its own right, or one of the
+     * two transposed matrix products the backward pass of matmul() is built
+     * from. None of the names is user-definable - see is_reserved_builtin_name
+     * - because the gradient code sema emits refers to them by name. */
+    BUILTIN_STEP,          /* step(t)  -> elementwise Heaviside, 1 where x > 0 */
+    BUILTIN_MATMUL_TN,     /* matmul_tn(A, B) = A^T * B                      */
+    BUILTIN_MATMUL_NT,     /* matmul_nt(A, B) = A * B^T                      */
+    BUILTIN_XENT_GRAD      /* cross_entropy_grad(logits, class) -> tensor     */
 } Builtin;
 
 typedef struct Func Func;

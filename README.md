@@ -34,6 +34,20 @@ hello: ELF 64-bit LSB executable, x86-64 ...
 
 ## Status
 
+v0.9.0 — **gradients**: `grad(f, x)`, reverse-mode automatic
+differentiation over floats, tensors and parameter structs. It is a
+compile-time special form: the compiler writes `f$grad` beside `f`, validates
+`f`'s body (only `let` and a final `send`), builds the backward pass as
+ordinary statements, and rewrites the call into a plain call to it. There is
+no tape and no runtime support — the derivative runs through the same type
+checker and the same code generator as anything you write, so a shape mistake
+in it is a compile error rather than a misaligned write at run time. A struct
+parameter comes back as a struct with one gradient per leaf, which is what
+makes `w = w - lr * g` type-check. Four new builtins (`step`, `matmul_tn`,
+`matmul_nt`, `cross_entropy_grad`) are what the backward pass is written
+with, and they are usable directly. See §15 of [USAGE.md](USAGE.md) and
+[examples/grad.duck](examples/grad.duck).
+
 v0.8.0 — **the AI core**: a `tensor` type whose **shape lives in the type**
 (`tensor[2, 3]` and `tensor[3, 2]` are different types), so a wrong shape is a
 compile error with a caret instead of a surprise at run time. Element-wise
@@ -49,7 +63,7 @@ arrays (`[1, 2, 3]`) and whole structs (`Point {x: 3, y: -4}`), nesting
 without ever emitting a line break of its own — which is what makes
 `serve(shape(t))` possible.
 See [USAGE.md](USAGE.md) for the walkthrough and [ROADMAP.md](ROADMAP.md) for
-what comes next: automatic differentiation, model files and the network layer.
+what comes next: optimizers, model files and the network layer.
 
 **Before that, v0.7.0 — renamed to Ducky**: project, language, compiler
 (`duckc` → `duckyc`), runtime prefix (`ducky_*`), diagnostics (`ducky:`),
@@ -92,6 +106,15 @@ comes next.
   `cross_entropy` (logsumexp, overflow-proof). Backed by an own `exp`/`log`
   accurate to ~1 ulp, so the whole thing still links no libm — and the tensor
   runtime is emitted only for programs that use tensors.
+* **Automatic differentiation**: `grad(f, x)` is the derivative of `f` with
+  respect to `x`, in the same type as `x`. It is a compile-time special form
+  — the compiler synthesizes an ordinary function `f$grad`, checks `f`'s body
+  (`let` statements and a final `send`, nothing else) and builds the backward
+  pass out of ordinary statements, so there is no tape and no runtime to
+  ship. Covers `+ - * /`, unary `-`, `matmul`, `dot`, `relu` / `sigmoid` /
+  `tanh` / `gelu`, `sum` / `mean`, `mse` / `cross_entropy`, tensor indexing
+  and struct fields; a struct parameter comes back as a struct with one
+  gradient per leaf.
 * **Static typing** with the built-in types `int` (64-bit), `float` (f64),
   `bool`, `string` and fixed-length arrays (`[int]`, `[float]`, `[bool]`,
   `[string]`), plus user-defined `struct` records. No implicit conversions;
@@ -240,7 +263,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckyc
-make test     # runs the test suite (108 tests)
+make test     # runs the test suite (121 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
@@ -343,7 +366,7 @@ ducky-lang/
 │   └── vscode/        VS Code/VSCodium/Cursor extension (.duck highlighting)
 ├── README.md          this file
 ├── USAGE.md           day-to-day usage guide with examples
-├── SPEC.md            language specification v0.8.0
+├── SPEC.md            language specification v0.9.0
 ├── ROADMAP.md         requirements: delivered and planned
 ├── src/
 │   ├── common.{h,c}   arena allocator, file loading, diagnostics
@@ -371,8 +394,8 @@ ducky-lang/
   §3.3 Tensors), statements, expressions, precedence table, the full builtin
   table, full grammar, reserved names, diagnostics.
 * [ROADMAP.md](ROADMAP.md) — requirements per milestone and the plan forward
-  (v0.8.0's tensor core, then automatic differentiation, model files and the
-  network layer).
+  (the tensor core and differentiation are in; next are optimizers, model
+  files and the network layer).
 
 ## License
 

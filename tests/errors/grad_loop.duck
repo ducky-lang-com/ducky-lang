@@ -1,0 +1,12 @@
+fn f(x: float) -> float {
+    let acc = 0.0;
+    for i in 0..3 {
+        acc = acc + x;
+    }
+    send acc;
+}
+
+fn main() -> int {
+    let g = grad(f, 1.0);
+    send 0;
+}

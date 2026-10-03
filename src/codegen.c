@@ -828,6 +828,62 @@ static void gen_call(Expr *e) {
             break;
         }
 
+        case BUILTIN_STEP:
+            gen_expr(e->call.args[0]);
+            emit("    mov %%rax, %%rdi\n");
+            emit("    mov $%ld, %%rsi\n", tensor_nelems(e->type));
+            emit_call("ducky_step");
+            break;
+
+        case BUILTIN_XENT_GRAD: {
+            long n = tensor_nelems(e->call.args[0]->type);
+            gen_expr(e->call.args[0]);
+            push_rax();
+            gen_expr(e->call.args[1]);
+            emit("    pop %%rdi\n"); /* logits in %rdi, class in %rax */
+            depth--;
+            emit("    mov %%rax, %%rsi\n");
+            emit("    mov $%ld, %%rdx\n", n);
+            emit_call("ducky_xent_grad");
+            break;
+        }
+
+        case BUILTIN_MATMUL_TN: {
+            /* A^T * B with A (m,k) and B (m,n); a rank-1 B is one column. */
+            Type at = e->call.args[0]->type;
+            Type bt = e->call.args[1]->type;
+            gen_expr(e->call.args[0]);
+            push_rax();
+            gen_expr(e->call.args[1]);
+            emit("    pop %%rdi\n");
+            depth--;
+            emit("    mov %%rax, %%rsi\n");
+            emit("    mov $%d, %%rdx\n", tensor_dim(at, 0));
+            emit("    mov $%d, %%rcx\n", tensor_dim(at, 1));
+            emit("    mov $%d, %%r8\n",
+                 tensor_rank(bt) == 1 ? 1 : tensor_dim(bt, 1));
+            emit_call("ducky_matmul_tn");
+            break;
+        }
+
+        case BUILTIN_MATMUL_NT: {
+            /* A * B^T with A (m,n) and B (k,n); either may be one column. */
+            Type at = e->call.args[0]->type;
+            Type bt = e->call.args[1]->type;
+            gen_expr(e->call.args[0]);
+            push_rax();
+            gen_expr(e->call.args[1]);
+            emit("    pop %%rdi\n");
+            depth--;
+            emit("    mov %%rax, %%rsi\n");
+            emit("    mov $%d, %%rdx\n", tensor_dim(at, 0));
+            emit("    mov $%d, %%rcx\n",
+                 tensor_rank(at) == 1 ? 1 : tensor_dim(at, 1));
+            emit("    mov $%d, %%r8\n", tensor_dim(bt, 0));
+            emit_call("ducky_matmul_nt");
+            break;
+        }
+
         case BUILTIN_NONE:
             break; /* unreachable (guarded above) */
         }
@@ -3121,9 +3177,243 @@ static void emit_tensor_runtime(void) {
         "    pop %rbx\n"
         "    ret\n");
 
+    /* The two transposed products the backward pass of matmul() is written
+     * with, and that are worth having on their own:
+     *     matmul_tn(A, B) = A^T * B   A (m,k), B (m,n) -> (k,n)
+     *     matmul_nt(A, B) = A * B^T   A (m,n), B (k,n) -> (m,k)
+     * A rank-1 operand is one column, which its row-major layout already
+     * is, so every index below is the plain one. */
+    emit_verbatim(
+        "\nducky_matmul_tn:\n"
+        "    push %rbx\n"
+        "    push %r12\n"
+        "    push %r13\n"
+        "    push %r14\n"
+        "    push %r15\n"
+        "    mov %rdi, %r12\n"                  /* A      */
+        "    mov %rsi, %r13\n"                  /* B      */
+        "    mov %rdx, %r14\n"                  /* m      */
+        "    mov %rcx, %r15\n"                  /* k      */
+        "    mov %r8, %rbx\n"                   /* n      */
+        "    mov %r15, %rdi\n"
+        "    imul %rbx, %rdi\n"                 /* k * n  */
+        "    shl $3, %rdi\n"
+        "    add $8, %rdi\n"
+        "    call ducky_alloc\n"
+        "    mov %rax, %r10\n"                  /* nothing below makes a call */
+        "    mov %r15, %rdx\n"
+        "    imul %rbx, %rdx\n"
+        "    movq %rdx, (%r10)\n"
+        "    xor %edx, %edx\n"                  /* i, over k */
+        ".Lmtn_i:\n"
+        "    cmp %r15, %rdx\n"
+        "    jge .Lmtn_done\n"
+        "    xor %ecx, %ecx\n"                  /* j, over n */
+        ".Lmtn_j:\n"
+        "    cmp %rbx, %rcx\n"
+        "    jge .Lmtn_i_next\n"
+        "    xorpd %xmm0, %xmm0\n"              /* acc */
+        "    xor %esi, %esi\n"                  /* p, over m */
+        ".Lmtn_p:\n"
+        "    cmp %r14, %rsi\n"
+        "    jge .Lmtn_store\n"
+        "    mov %rsi, %rax\n"
+        "    imul %r15, %rax\n"
+        "    add %rdx, %rax\n"                  /* p * k + i */
+        "    movsd 8(%r12, %rax, 8), %xmm1\n"
+        "    mov %rsi, %rax\n"
+        "    imul %rbx, %rax\n"
+        "    add %rcx, %rax\n"                  /* p * n + j */
+        "    movsd 8(%r13, %rax, 8), %xmm2\n"
+        "    mulsd %xmm2, %xmm1\n"
+        "    addsd %xmm1, %xmm0\n"
+        "    inc %rsi\n"
+        "    jmp .Lmtn_p\n"
+        ".Lmtn_store:\n"
+        "    mov %rdx, %rax\n"
+        "    imul %rbx, %rax\n"
+        "    add %rcx, %rax\n"                  /* i * n + j */
+        "    movsd %xmm0, 8(%r10, %rax, 8)\n"
+        "    inc %rcx\n"
+        "    jmp .Lmtn_j\n"
+        ".Lmtn_i_next:\n"
+        "    inc %rdx\n"
+        "    jmp .Lmtn_i\n"
+        ".Lmtn_done:\n"
+        "    mov %r10, %rax\n"
+        "    pop %r15\n"
+        "    pop %r14\n"
+        "    pop %r13\n"
+        "    pop %r12\n"
+        "    pop %rbx\n"
+        "    ret\n"
+
+        "\nducky_matmul_nt:\n"
+        "    push %rbx\n"
+        "    push %r12\n"
+        "    push %r13\n"
+        "    push %r14\n"
+        "    push %r15\n"
+        "    mov %rdi, %r12\n"                  /* A      */
+        "    mov %rsi, %r13\n"                  /* B      */
+        "    mov %rdx, %r14\n"                  /* m      */
+        "    mov %rcx, %rbx\n"                  /* n      */
+        "    mov %r8, %r15\n"                   /* k      */
+        "    mov %r14, %rdi\n"
+        "    imul %r15, %rdi\n"                 /* m * k  */
+        "    shl $3, %rdi\n"
+        "    add $8, %rdi\n"
+        "    call ducky_alloc\n"
+        "    mov %rax, %r10\n"
+        "    mov %r14, %rdx\n"
+        "    imul %r15, %rdx\n"
+        "    movq %rdx, (%r10)\n"
+        "    xor %edx, %edx\n"                  /* i, over m */
+        ".Lmnt_i:\n"
+        "    cmp %r14, %rdx\n"
+        "    jge .Lmnt_done\n"
+        "    xor %ecx, %ecx\n"                  /* j, over k */
+        ".Lmnt_j:\n"
+        "    cmp %r15, %rcx\n"
+        "    jge .Lmnt_i_next\n"
+        "    xorpd %xmm0, %xmm0\n"              /* acc */
+        "    xor %esi, %esi\n"                  /* p, over n */
+        ".Lmnt_p:\n"
+        "    cmp %rbx, %rsi\n"
+        "    jge .Lmnt_store\n"
+        "    mov %rdx, %rax\n"
+        "    imul %rbx, %rax\n"
+        "    add %rsi, %rax\n"                  /* i * n + p */
+        "    movsd 8(%r12, %rax, 8), %xmm1\n"
+        "    mov %rcx, %rax\n"
+        "    imul %rbx, %rax\n"
+        "    add %rsi, %rax\n"                  /* j * n + p */
+        "    movsd 8(%r13, %rax, 8), %xmm2\n"
+        "    mulsd %xmm2, %xmm1\n"
+        "    addsd %xmm1, %xmm0\n"
+        "    inc %rsi\n"
+        "    jmp .Lmnt_p\n"
+        ".Lmnt_store:\n"
+        "    mov %rdx, %rax\n"
+        "    imul %r15, %rax\n"
+        "    add %rcx, %rax\n"                  /* i * k + j */
+        "    movsd %xmm0, 8(%r10, %rax, 8)\n"
+        "    inc %rcx\n"
+        "    jmp .Lmnt_j\n"
+        ".Lmnt_i_next:\n"
+        "    inc %rdx\n"
+        "    jmp .Lmnt_i\n"
+        ".Lmnt_done:\n"
+        "    mov %r10, %rax\n"
+        "    pop %r15\n"
+        "    pop %r14\n"
+        "    pop %r13\n"
+        "    pop %r12\n"
+        "    pop %rbx\n"
+        "    ret\n");
+
+    /* d/dlogits of cross_entropy(logits, class) = softmax(logits) -
+     * onehot(class): softmax in place on a fresh block, then one subtraction.
+     * The running sum cannot sit in an xmm register while ducky_exp runs and
+     * neither can the counter, which is why the loop that calls it counts in
+     * %rbx - the callee-saved register that routine never touches. */
+    emit_verbatim(
+        "\nducky_xent_grad:\n"
+        "    push %rbx\n"
+        "    push %r12\n"
+        "    push %r13\n"
+        "    push %r14\n"
+        "    push %r15\n"
+        "    mov %rdi, %r12\n"                  /* logits */
+        "    mov %rsi, %r13\n"                  /* class  */
+        "    mov %rdx, %r14\n"                  /* n      */
+        "    cmp %r14, %r13\n"
+        "    jae ducky_oob\n"                   /* also catches a negative index */
+        "    mov %r14, %rdi\n"
+        "    shl $3, %rdi\n"
+        "    add $8, %rdi\n"
+        "    call ducky_alloc\n"
+        "    movq %r14, (%rax)\n"
+        "    mov %rax, %r15\n"                  /* result */
+        "    lea 8(%r12), %rsi\n"
+        "    lea 8(%r15), %rdi\n"
+        "    mov %r14, %rcx\n"
+        "    cld\n"
+        "    rep movsq\n"
+        "    movsd 8(%r15), %xmm0\n"
+        "    mov $1, %ecx\n"
+        ".Lxg_max_t:\n"
+        "    cmp %r14, %rcx\n"
+        "    jge .Lxg_max_d\n"
+        "    movsd 8(%r15, %rcx, 8), %xmm1\n"
+        "    maxsd %xmm1, %xmm0\n"
+        "    inc %rcx\n"
+        "    jmp .Lxg_max_t\n"
+        ".Lxg_max_d:\n"
+        "    xor %ecx, %ecx\n"
+        ".Lxg_sub_t:\n"
+        "    cmp %r14, %rcx\n"
+        "    jge .Lxg_sub_d\n"
+        "    movsd 8(%r15, %rcx, 8), %xmm1\n"
+        "    subsd %xmm0, %xmm1\n"
+        "    movsd %xmm1, 8(%r15, %rcx, 8)\n"
+        "    inc %rcx\n"
+        "    jmp .Lxg_sub_t\n"
+        ".Lxg_sub_d:\n"
+        /* ducky_exp clobbers every caller-saved register, so the counter for
+         * the loop that calls it lives in %rbx - the one it leaves alone. */
+        "    xor %ebx, %ebx\n"
+        ".Lxg_exp_t:\n"
+        "    cmp %r14, %rbx\n"
+        "    jge .Lxg_exp_d\n"
+        "    movq 8(%r15, %rbx, 8), %rdi\n"
+        "    call ducky_exp\n"
+        "    movq %rax, 8(%r15, %rbx, 8)\n"
+        "    inc %rbx\n"
+        "    jmp .Lxg_exp_t\n"
+        ".Lxg_exp_d:\n"
+        "    xorpd %xmm2, %xmm2\n"
+        "    xor %ecx, %ecx\n"
+        ".Lxg_sum_t:\n"
+        "    cmp %r14, %rcx\n"
+        "    jge .Lxg_sum_d\n"
+        "    addsd 8(%r15, %rcx, 8), %xmm2\n"
+        "    inc %rcx\n"
+        "    jmp .Lxg_sum_t\n"
+        ".Lxg_sum_d:\n"
+        "    xor %ecx, %ecx\n"
+        ".Lxg_div_t:\n"
+        "    cmp %r14, %rcx\n"
+        "    jge .Lxg_div_d\n"
+        "    movsd 8(%r15, %rcx, 8), %xmm1\n"
+        "    divsd %xmm2, %xmm1\n"
+        "    movsd %xmm1, 8(%r15, %rcx, 8)\n"
+        "    inc %rcx\n"
+        "    jmp .Lxg_div_t\n"
+        ".Lxg_div_d:\n"
+        "    movsd 8(%r15, %r13, 8), %xmm0\n"
+        "    movsd .Ltf_one(%rip), %xmm1\n"
+        "    subsd %xmm1, %xmm0\n"
+        "    movsd %xmm0, 8(%r15, %r13, 8)\n"
+        "    mov %r15, %rax\n"
+        "    pop %r15\n"
+        "    pop %r14\n"
+        "    pop %r13\n"
+        "    pop %r12\n"
+        "    pop %rbx\n"
+        "    ret\n");
+
     /* Activations. gelu keeps x in r13 across its call to tanh1 - the loop
      * registers are the callee-saved ones precisely so a body can call. */
     emit_tensor_map("ducky_relu", "xorpd %xmm1, %xmm1", "maxsd %xmm1, %xmm0");
+    /* step(x) = 1 where x > 0, else 0: the derivative of relu, and an
+     * activation in its own right. NaN compares above nothing, so it gives 0. */
+    emit_tensor_map("ducky_step", NULL,
+                    "xorpd %xmm1, %xmm1\n"
+                    "    comisd %xmm1, %xmm0\n"
+                    "    seta %al\n"
+                    "    movzbl %al, %eax\n"
+                    "    cvtsi2sd %rax, %xmm0");
     emit_tensor_map("ducky_sigmoid", NULL,
                     "movq %xmm0, %rdi\n"
                     "    call ducky_sigmoid1\n"

@@ -96,8 +96,9 @@ all passing.**
 | N26 | Seeded uniform generator: `rand([d, …])`, `seed(n)` | done — v0.8.0; splitmix64, reproducible across runs and across machines |
 | N27 | Tensor parameters and return types | done — v0.8.0; `fn scale(t: tensor[2, 3], k: float) -> tensor[2, 3]` |
 | N28 | Tensor runtime is **emitted only when used** | done — v0.8.0; an AST walk sets the flag, so a program that never mentions tensors links none of it (15 KB vs 21 KB binary) |
-| N29 | Builtin names stay user-definable | done — v0.8.0; only `serve`/`len`/`str`/`input_line`/`float`/`int`/`push`/`scan_*`/`tensor` are reserved. A user `sum`, `rand`, `max` or `min` shadows the builtin of the same name, so programs written before v0.8.0 keep compiling unchanged |
+| N29 | Builtin names stay user-definable | done — v0.8.0; only `serve`/`len`/`str`/`input_line`/`float`/`int`/`push`/`scan_*`/`tensor` are reserved (plus `grad`, `step`, `matmul_tn`, `matmul_nt`, `cross_entropy_grad` since N31: `grad` is a special form and the other four are named by the code its backward pass emits). A user `sum`, `rand`, `max` or `min` shadows the builtin of the same name, so programs written before v0.8.0 keep compiling unchanged |
 | N30 | `serve()` prints arrays and structs | done — v0.8.0; arrays as `[1, 2, 3]`, structs as `Name {field: value, ...}` with fields in declaration order. Nesting composes and never emits a line break of its own, so a struct holding an array, a tensor and another struct prints on one line. No run-time type tag: the compiler writes a descriptor per struct type it prints (name, field count, name/tag/extra/extra2 per field) and the walker reads it. Every address in a descriptor is stored as a **gap** (`label - descriptor`) rather than an absolute pointer, so the table carries no relocation — a program that links with `cc` (the `extern fn` path, which asks for a PIE) would otherwise get text relocations in `.rodata`. `void` remains the only thing `serve` rejects. This is what makes `serve(shape(t))` possible |
+| N31 | Reverse-mode automatic differentiation: `grad(f, x)` | done — v0.9.0; a compile-time special form. `f` must take one parameter (`float`, a tensor, or a struct of those) and return `float`, and its body must be `let` statements plus a final `send` — no `if`, loops, assignment or non-builtin calls, each rejected naming the statement. The compiler writes `f$grad` beside `f`: `f`'s statements, one gradient local per differentiable leaf (`g$name` / `g$name_field`), the backward pass as ordinary statements in reverse order, and a construction of the gradient. No tape and no runtime; every node it builds goes through the ordinary analyzer, so a shape mistake in the derivative is a compile error. Chain rule covers `+ - * /`, unary `-`, `matmul`, `dot`, `relu`/`sigmoid`/`tanh`/`gelu`, `sum`/`mean`, `mse`/`cross_entropy`, indexing and struct fields; constants are skipped; `softmax`/`max`/`min` are rejected by name rather than silently treated as zero. Adds `step`, `matmul_tn`, `matmul_nt`, `cross_entropy_grad` as builtins |
 
 **Update v0.4.0:** floats, arrays (with string indexing), `const`, `push()`
 and the numeric conversions. The suite is then **59 tests (22 runtime + 37
@@ -131,6 +132,18 @@ possible. Builtin names
 that programs have always been free to define (`sum`, `rand`, `max`, `min`,
 `shape`, …) remain definable: a user definition shadows the builtin. The
 suite is now **108 tests (29 runtime + 79 error), all passing.**
+
+**Update v0.9.0 — differentiation (N31):** `grad(f, x)`, reverse-mode automatic
+differentiation over floats, tensors and parameter structs. It is a
+compile-time special form: the compiler writes `f$grad` beside `f`,
+type-checks it like any other function and rewrites the call into an ordinary
+call to it — no tape, no runtime support, no change to the freestanding
+contract. Four new builtins (`step`, `matmul_tn`, `matmul_nt`,
+`cross_entropy_grad`) are what the backward pass is written with, and they
+are usable directly from a hand-written loop. A struct parameter comes back as
+a struct with a gradient per leaf, which is what makes `w = w - lr * g`
+type-check. The suite is now **121 tests (31 runtime + 90 error), all
+passing.**
 
 ## Milestone M2 — Engineering
 
@@ -194,7 +207,7 @@ runs on a bare machine.
 
 | # | Requirement | Notes |
 |---|---|---|
-| Y1 | Reverse-mode automatic differentiation over tensors | gradients as tensors, tape or symbolic; `grad(f, x)` or an explicit `backward()` |
+| Y1 | Reverse-mode automatic differentiation over tensors | **done** — `grad(f, x)`, a compile-time special form that synthesizes an ordinary `f$grad`. No tape: `f`'s body must be `let` statements plus a final `send`, and the backward pass is built out of ordinary statements the type checker runs over. Works on `float`, tensors and structs of those; see USAGE §15 |
 | Y2 | Optimizers: SGD (with momentum), Adam | apply a gradient in place, learning rate as an argument |
 | Y3 | A `Layer`/`Module` vocabulary: dense layers, chains, forward pass | structs plus functions, no new syntax if it can be avoided |
 | Y4 | Training loop on a small dataset, with a printed loss curve | the proof that Y1–Y3 work end to end |

@@ -1,0 +1,8 @@
+fn f(x: float) -> float {
+    let y = grad(f, x);
+    send y;
+}
+
+fn main() -> int {
+    send 0;
+}
