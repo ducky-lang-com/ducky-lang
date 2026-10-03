@@ -5,3 +5,7 @@ duckc
 build/
 *.s
 *.out
+
+# release assets built locally with `make LDFLAGS=-static`
+duckyc-linux-x86_64
+duckyc-linux-x86_64.sha256

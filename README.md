@@ -160,6 +160,22 @@ sh install.sh --no-editor    # compiler only, skip the editor extension
 sh install.sh --uninstall    # remove both again
 ```
 
+### Prebuilt binary
+
+Every tag also publishes a self-contained binary on the
+[Releases page](https://github.com/ducky-lang-com/ducky-lang/releases), with
+its checksum alongside it:
+
+```sh
+curl -fsSL -o duckyc \
+  https://github.com/ducky-lang-com/ducky-lang/releases/latest/download/duckyc-linux-x86_64
+chmod +x duckyc
+./duckyc --version
+```
+
+It is statically linked and needs nothing else — no compiler, no binutils, no
+git. Linux x86-64 only, same as everything else here.
+
 ### From a checkout
 
 ```sh
@@ -228,6 +244,24 @@ make test     # runs the test suite (108 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```
+
+### Publishing a release
+
+A tag is the whole trigger — `.github/workflows/release.yml` re-runs the
+suite, refuses to publish if the tag does not match `DUCKYC_VERSION`, builds
+the static binary, smoke-tests it and attaches it to the release together
+with its `sha256`:
+
+```sh
+# 1. bump DUCKYC_VERSION in src/version.h, update the docs, commit
+git tag -a v0.9.0 -m "Ducky v0.9.0 — ..."
+git push origin main v0.9.0
+```
+
+Release notes are read from `release-notes/v0.9.0.md` when that file exists,
+and are generated from the commits since the previous tag otherwise. The
+notes of past releases are kept in [release-notes/](release-notes/).
+A re-run of the workflow replaces the assets instead of failing.
 
 ## Usage
 
