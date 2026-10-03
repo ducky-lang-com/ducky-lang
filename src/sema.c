@@ -1048,6 +1048,88 @@ static Type check_expr(Expr *e) {
             return e->type = tensor_type_intern(out, outrank)->type;
         }
 
+        /* Optimizers (v0.9.0). Each writes its update into the parameter
+         * itself and evaluates to that parameter, so the call reads the same
+         * way whether you use it as a statement or assign it back to the same
+         * name. The distinction that matters is state: `sgd` has none and
+         * works on a `float` too, while `momentum` and `adam` keep a running
+         * average that has to live in memory the callee can reach - a
+         * `float` argument would be a copy. */
+        if (strcmp(name, "sgd") == 0 || strcmp(name, "momentum") == 0 ||
+            strcmp(name, "adam") == 0) {
+            int is_sgd = strcmp(name, "sgd") == 0;
+            int is_mom = strcmp(name, "momentum") == 0;
+            int nwant = is_sgd ? 3 : is_mom ? 5 : 6;
+            if (e->call.nargs != nwant) {
+                err_node(e, "%s() expects exactly %d arguments, found %d - as in "
+                            "%s",
+                         name, nwant, e->call.nargs,
+                         is_sgd ? "sgd(w, g, lr)"
+                                : is_mom ? "momentum(w, g, lr, v, beta)"
+                                         : "adam(w, g, lr, m, v, t)");
+            }
+            Type p = check_expr(e->call.args[0]);
+            if (p != TY_FLOAT && !type_is_tensor(p))
+                err_node(e->call.args[0],
+                         "%s() expects a 'float' or a tensor to update, found '%s'",
+                         name, type_name(p));
+            /* Before anything else: a parameter without a home for the state
+             * is not a matter of shapes, and saying so first keeps the
+             * diagnostic about the argument the reader has to change. */
+            if (!is_sgd && p == TY_FLOAT)
+                err_node(e->call.args[0],
+                         "%s() needs a tensor: it keeps state, and a 'float' "
+                         "argument would only carry a copy of it. For a scalar "
+                         "parameter write `x = x - lr * g` by hand",
+                         name);
+            Type gt = check_expr(e->call.args[1]);
+            Type lr = check_expr(e->call.args[2]);
+            if (gt != p)
+                err_node(e->call.args[1],
+                         "%s() expects the gradient to have the parameter's type, "
+                         "found '%s' for '%s'",
+                         name, type_name(gt), type_name(p));
+            if (lr != TY_FLOAT)
+                err_node(e->call.args[2],
+                         "%s() expects the learning rate as a 'float', found '%s' - "
+                         "as in %s(w, g, 0.01)",
+                         name, type_name(lr), name);
+            if (!is_sgd) {
+                Type s = check_expr(e->call.args[3]);
+                if (s != p)
+                    err_node(e->call.args[3],
+                             "%s() expects the state to have the parameter's type, "
+                             "found '%s' for '%s'",
+                             name, type_name(s), type_name(p));
+            }
+            if (is_mom) {
+                Type b = check_expr(e->call.args[4]);
+                if (b != TY_FLOAT)
+                    err_node(e->call.args[4],
+                             "momentum() expects beta as a 'float', found '%s' - "
+                             "as in momentum(w, g, 0.01, v, 0.9)",
+                             type_name(b));
+                e->call.builtin = BUILTIN_MOMENTUM;
+            } else if (!is_sgd) {
+                Type s = check_expr(e->call.args[4]);
+                if (s != p)
+                    err_node(e->call.args[4],
+                             "adam() expects the second state to have the "
+                             "parameter's type, found '%s' for '%s'",
+                             type_name(s), type_name(p));
+                Type t = check_expr(e->call.args[5]);
+                if (t != TY_INT)
+                    err_node(e->call.args[5],
+                             "adam() expects the step count as an 'int', found '%s' "
+                             "- it counts updates already made, starting at 0",
+                             type_name(t));
+                e->call.builtin = BUILTIN_ADAM;
+            } else {
+                e->call.builtin = BUILTIN_SGD;
+            }
+            return e->type = p;
+        }
+
         /* A struct constructor: `Point(1, 2)` resolves against the registry
          * (interned by the parser pre-pass), not the function table. */
         StructDecl *sdef = struct_type_lookup(name);

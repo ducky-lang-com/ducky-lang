@@ -133,7 +133,7 @@ that programs have always been free to define (`sum`, `rand`, `max`, `min`,
 `shape`, …) remain definable: a user definition shadows the builtin. The
 suite is now **108 tests (29 runtime + 79 error), all passing.**
 
-**Update v0.9.0 — differentiation (N31):** `grad(f, x)`, reverse-mode automatic
+**Update v0.9.0 — differentiation and optimizers (N31, Y1–Y2):** `grad(f, x)`, reverse-mode automatic
 differentiation over floats, tensors and parameter structs. It is a
 compile-time special form: the compiler writes `f$grad` beside `f`,
 type-checks it like any other function and rewrites the call into an ordinary
@@ -141,8 +141,12 @@ call to it — no tape, no runtime support, no change to the freestanding
 contract. Four new builtins (`step`, `matmul_tn`, `matmul_nt`,
 `cross_entropy_grad`) are what the backward pass is written with, and they
 are usable directly from a hand-written loop. A struct parameter comes back as
-a struct with a gradient per leaf, which is what makes `w = w - lr * g`
-type-check. The suite is now **121 tests (31 runtime + 90 error), all
+a struct with a gradient per leaf, which is what makes `sgd(p.w, g.w, lr)`
+reach the block the struct already holds. Alongside it the three optimizers —
+`sgd`, `momentum` and `adam` — apply one update **in place** and evaluate to
+the parameter they updated, so a training step allocates nothing where
+`w = w - lr * g` would allocate a new parameter block every step and never
+reclaim it. The suite is now **129 tests (32 runtime + 97 error), all
 passing.**
 
 ## Milestone M2 — Engineering
@@ -208,7 +212,7 @@ runs on a bare machine.
 | # | Requirement | Notes |
 |---|---|---|
 | Y1 | Reverse-mode automatic differentiation over tensors | **done** — `grad(f, x)`, a compile-time special form that synthesizes an ordinary `f$grad`. No tape: `f`'s body must be `let` statements plus a final `send`, and the backward pass is built out of ordinary statements the type checker runs over. Works on `float`, tensors and structs of those; see USAGE §15 |
-| Y2 | Optimizers: SGD (with momentum), Adam | apply a gradient in place, learning rate as an argument |
+| Y2 | Optimizers: SGD (with momentum), Adam | **done** — `sgd(x, g, lr)`, `momentum(x, g, lr, v, beta)` and `adam(x, g, lr, m, v, t)`, each writing its update **into the parameter** and evaluating to it, so a step allocates nothing and the parameter keeps its address for the whole run — which `w = w - lr * g` cannot say, since that expression builds a fresh block every step. `sgd` also takes a `float` (a bias) and then evaluates to the new value; the other two keep running averages and so need a tensor to keep them in. Adam's bias correction is found by squaring, not by looping `t` times. See USAGE §16 |
 | Y3 | A `Layer`/`Module` vocabulary: dense layers, chains, forward pass | structs plus functions, no new syntax if it can be avoided |
 | Y4 | Training loop on a small dataset, with a printed loss curve | the proof that Y1–Y3 work end to end |
 | Y5 | Deterministic data: `rand` reshaping helpers, shuffling, train/test split | builds on `seed(n)` |

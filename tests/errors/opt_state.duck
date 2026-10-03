@@ -1,0 +1,8 @@
+// The state tensor has to match the parameter it is the state of.
+fn main() -> int {
+    let w: tensor[2] = zeros([2]);
+    let g: tensor[2] = zeros([2]);
+    let v: tensor[3] = zeros([3]);
+    momentum(w, g, 0.1, v, 0.9);
+    send 0;
+}

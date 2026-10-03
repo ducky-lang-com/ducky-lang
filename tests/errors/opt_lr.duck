@@ -1,0 +1,7 @@
+// The learning rate is a float; `0` is an int and Ducky does not widen.
+fn main() -> int {
+    let w: tensor[2] = zeros([2]);
+    let g: tensor[2] = zeros([2]);
+    sgd(w, g, 1);
+    send 0;
+}

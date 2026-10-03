@@ -1,0 +1,9 @@
+// adam() counts the updates it has already made.
+fn main() -> int {
+    let w: tensor[2] = zeros([2]);
+    let g: tensor[2] = zeros([2]);
+    let m: tensor[2] = zeros([2]);
+    let v: tensor[2] = zeros([2]);
+    adam(w, g, 0.1, m, v, 1.0);
+    send 0;
+}

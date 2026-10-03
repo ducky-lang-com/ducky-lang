@@ -201,7 +201,18 @@ typedef enum {
     BUILTIN_STEP,          /* step(t)  -> elementwise Heaviside, 1 where x > 0 */
     BUILTIN_MATMUL_TN,     /* matmul_tn(A, B) = A^T * B                      */
     BUILTIN_MATMUL_NT,     /* matmul_nt(A, B) = A * B^T                      */
-    BUILTIN_XENT_GRAD      /* cross_entropy_grad(logits, class) -> tensor     */
+    BUILTIN_XENT_GRAD,     /* cross_entropy_grad(logits, class) -> tensor     */
+
+    /* Optimizers (v0.9.0). Each applies one update to a parameter *in
+     * place* and evaluates to that parameter, so a training step allocates
+     * nothing - which is the whole point: `w = w - lr * g` builds a fresh
+     * block on every step and nothing ever reclaims the old ones. Unlike the
+     * differentiation builtins above, these names are not reserved: generated
+     * code never calls them, so a user definition shadows them like `sum` or
+     * `matmul` does (N29). */
+    BUILTIN_SGD,           /* sgd(x, g, lr) -> x,  x -= lr * g             */
+    BUILTIN_MOMENTUM,      /* momentum(x, g, lr, v, b) -> x                */
+    BUILTIN_ADAM           /* adam(x, g, lr, m, v, t) -> x                 */
 } Builtin;
 
 typedef struct Func Func;

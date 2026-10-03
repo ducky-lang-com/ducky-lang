@@ -1,0 +1,7 @@
+// sgd() takes a parameter, a gradient and a learning rate.
+fn main() -> int {
+    let w: tensor[2] = zeros([2]);
+    let g: tensor[2] = zeros([2]);
+    sgd(w, g);
+    send 0;
+}

@@ -1,0 +1,8 @@
+// momentum() keeps state, and a float has nowhere to keep it.
+fn main() -> int {
+    let b = 0.0;
+    let gb = 0.0;
+    let vb = 0.0;
+    momentum(b, gb, 0.1, vb, 0.9);
+    send 0;
+}

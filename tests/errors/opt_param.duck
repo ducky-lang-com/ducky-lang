@@ -1,0 +1,8 @@
+// A struct parameter has to be updated leaf by leaf.
+struct P { w: tensor[2], b: float }
+fn main() -> int {
+    let p = P(zeros([2]), 0.0);
+    let g = P(zeros([2]), 0.0);
+    sgd(p, g, 0.1);
+    send 0;
+}

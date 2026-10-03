@@ -1,0 +1,83 @@
+// opt.duck - sgd, momentum and adam: one hand-checked step each, then a
+// fit in which all three have to bring the loss down.
+//
+// Every number in the first half was worked out by hand; the comments say
+// which arithmetic produced it.
+
+// Least squares on two points: f(0) = w[1] and f(1) = w[0] + w[1], against
+// the targets 0 and 2. The minimum is w = [2, 0] and loss(0, 0) = 2.
+fn loss(w: tensor[2]) -> float {
+    let e0 = w[1] - 0.0;
+    let e1 = w[0] + w[1] - 2.0;
+    send (e0 * e0 + e1 * e1) * 0.5;
+}
+
+fn main() -> int {
+    let g: tensor[2] = tensor([2], [0.5, -1.0]);
+
+    // sgd: x -= lr*g, written into the parameter itself
+    let w: tensor[2] = tensor([2], [1.0, 2.0]);
+    sgd(w, g, 0.1);
+    serve(w);                       // [0.95, 2.1]
+
+    // sgd on a float: nothing to write into, so it is x - lr*g
+    let b = 1.0;
+    b = sgd(b, 0.5, 0.1);
+    serve(b);                       // 0.95
+
+    // momentum: v := 0.9*v + g, then x -= lr*v
+    let v: tensor[2] = zeros([2]);
+    let p: tensor[2] = tensor([2], [1.0, 2.0]);
+    momentum(p, g, 0.1, v, 0.9);
+    serve(p);                       // v = [0.5, -1], p -= 0.1*v
+    serve(v);                       // [0.5, -1]
+    momentum(p, g, 0.1, v, 0.9);
+    serve(p);                       // v = [0.95, -1.9], p -= 0.1*v
+    serve(v);                       // [0.95, -1.9]
+
+    // adam, first step: with m and v still zero the bias correction divides
+    // them back out, so the update is lr * sign(g) whatever g's size - here
+    // 0.1/(sqrt(0.25) + 1e-8) and 0.1/(sqrt(1) + 1e-8).
+    let a: tensor[2] = tensor([2], [1.0, -1.0]);
+    let am: tensor[2] = zeros([2]);
+    let av: tensor[2] = zeros([2]);
+    adam(a, g, 0.1, am, av, 0);
+    serve(a);                       // [0.900000002, -0.9000000005]
+    serve(am);                      // [0.05, -0.1]
+    serve(av);                      // [0.00025, 0.001]
+
+    // A fit. Each block re-asks for the gradient, so what is being compared
+    // is the update rule alone - and each has to beat the starting loss.
+    let first = loss(zeros([2]));
+    serve(first);                   // 2
+
+    let sw: tensor[2] = zeros([2]);
+    let sg: tensor[2] = grad(loss, sw);
+    for i in 0..40 {
+        sg = grad(loss, sw);
+        sgd(sw, sg, 0.1);
+    }
+    serve(loss(sw) < first);
+
+    let mw: tensor[2] = zeros([2]);
+    let mv: tensor[2] = zeros([2]);
+    for i in 0..40 {
+        sg = grad(loss, mw);
+        momentum(mw, sg, 0.1, mv, 0.9);
+    }
+    serve(loss(mw) < first);
+
+    let aw: tensor[2] = zeros([2]);
+    let amv: tensor[2] = zeros([2]);
+    let avv: tensor[2] = zeros([2]);
+    let t = 0;
+    for i in 0..40 {
+        sg = grad(loss, aw);
+        adam(aw, sg, 0.1, amv, avv, t);
+        t = t + 1;
+    }
+    serve(loss(aw) < first);
+    serve(t);                       // 40
+
+    send 0;
+}

@@ -43,10 +43,13 @@ no tape and no runtime support — the derivative runs through the same type
 checker and the same code generator as anything you write, so a shape mistake
 in it is a compile error rather than a misaligned write at run time. A struct
 parameter comes back as a struct with one gradient per leaf, which is what
-makes `w = w - lr * g` type-check. Four new builtins (`step`, `matmul_tn`,
-`matmul_nt`, `cross_entropy_grad`) are what the backward pass is written
-with, and they are usable directly. See §15 of [USAGE.md](USAGE.md) and
-[examples/grad.duck](examples/grad.duck).
+makes `sgd(p.w, g.w, lr)` reach the block the struct already holds. Four new
+builtins (`step`, `matmul_tn`, `matmul_nt`, `cross_entropy_grad`) are what the
+backward pass is written with, and they are usable directly. On top of that,
+`sgd`, `momentum` and `adam` apply an update **in place** and evaluate to the
+parameter they updated: a step allocates nothing, where `w = w - lr * g` would
+build a fresh block every step and never give it back. See §15 and §16 of
+[USAGE.md](USAGE.md) and [examples/grad.duck](examples/grad.duck).
 
 v0.8.0 — **the AI core**: a `tensor` type whose **shape lives in the type**
 (`tensor[2, 3]` and `tensor[3, 2]` are different types), so a wrong shape is a
@@ -115,6 +118,13 @@ comes next.
   `tanh` / `gelu`, `sum` / `mean`, `mse` / `cross_entropy`, tensor indexing
   and struct fields; a struct parameter comes back as a struct with one
   gradient per leaf.
+* **Optimizers**: `sgd(x, g, lr)`, `momentum(x, g, lr, v, beta)` and
+  `adam(x, g, lr, m, v, t)` apply one update **into the parameter itself**
+  and evaluate to it, so a training step allocates nothing and the parameter
+  keeps its address for the whole run — what `w = w - lr * g` gets wrong,
+  because that expression builds a fresh block every step. `sgd` also works
+  on a `float` (a bias); the other two carry running averages and so need a
+  tensor to carry them in.
 * **Static typing** with the built-in types `int` (64-bit), `float` (f64),
   `bool`, `string` and fixed-length arrays (`[int]`, `[float]`, `[bool]`,
   `[string]`), plus user-defined `struct` records. No implicit conversions;
@@ -263,7 +273,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckyc
-make test     # runs the test suite (121 tests)
+make test     # runs the test suite (129 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```

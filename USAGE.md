@@ -24,8 +24,9 @@ installing.
 13. [Tensors](#13-tensors)
 14. [The neural-net builtins](#14-the-neural-net-builtins)
 15. [Gradients: `grad(f, x)`](#15-gradients-gradf-x)
-16. [Errors and diagnostics](#16-errors-and-diagnostics)
-17. [The output of a program](#17-the-output-of-a-program)
+16. [Optimizers: `sgd`, `momentum`, `adam`](#16-optimizers-sgd-momentum-adam)
+17. [Errors and diagnostics](#17-errors-and-diagnostics)
+18. [The output of a program](#18-the-output-of-a-program)
 
 ---
 
@@ -34,7 +35,7 @@ installing.
 ```sh
 # from a checkout
 make
-make test          # 121 tests
+make test          # 129 tests
 
 # or install it system-wide (and the editor extension)
 curl -fsSL https://raw.githubusercontent.com/ducky-lang-com/ducky-lang/main/install.sh | sh
@@ -347,7 +348,7 @@ fn main() -> int {
 * A struct and a function may not share a name.
 * You cannot compare whole structs — compare the fields you care about.
 * `serve` prints one as `Point {x: 1, y: 2}`: the struct's name, then every
-  field in declaration order. Nesting works the same way (see §16).
+  field in declaration order. Nesting works the same way (see §18).
 
 ---
 
@@ -724,7 +725,74 @@ in terms of `grad(f, …)` is rejected rather than unrolled.
 
 ---
 
-## 16. Errors and diagnostics
+## 16. Optimizers: `sgd`, `momentum`, `adam`
+
+A gradient says which way is downhill. These three take one step, and they
+take it **into the parameter itself**:
+
+```duck
+let w: tensor[2, 3] = zeros([2, 3]);
+let g: tensor[2, 3] = zeros([2, 3]);
+sgd(w, g, 0.01);            // w := w - 0.01*g, in place
+w = sgd(w, g, 0.01);        // the same step, written the other way round
+```
+
+`w = w - lr * g` says the same thing and is wrong for anything longer than a
+demo: every step builds a fresh block for the result, and nothing in a
+freestanding program ever reclaims the old ones — the parameter would change
+address on every step and the arena under it would grow without end. Each of
+the three below writes into the block that is already there, so a step
+allocates nothing at all.
+
+| Call | One step does |
+|---|---|
+| `sgd(x, g, lr)` | `x := x − lr·g` |
+| `momentum(x, g, lr, v, beta)` | `v := beta·v + g`, then `x := x − lr·v` |
+| `adam(x, g, lr, m, v, t)` | `m := .9m + .1g`, `v := .999v + .001g²`, then `x := x − lr · (m̂ / (√v̂ + 1e-8))` with `m̂ = m/(1−.9ᵏ)`, `v̂ = v/(1−.999ᵏ)` and `k = t+1` |
+
+Each **evaluates to the parameter it updated**, so the call reads the same
+whether you use it as a statement or assign it back to the same name. `x` and
+`g` must have the same type — for a tensor, the same shape — and `lr` is a
+`float`.
+
+`momentum` and `adam` carry running averages, so they need a tensor to carry
+them in. Both state tensors have the parameter's shape and start at zero:
+
+```duck
+let v: tensor[2, 3] = zeros([2, 3]);
+momentum(w, g, 0.01, v, 0.9);
+
+let am: tensor[2, 3] = zeros([2, 3]);
+let av: tensor[2, 3] = zeros([2, 3]);
+let t = 0;
+adam(w, g, 0.01, am, av, t);
+t = t + 1;                  // t counts the updates already made, from 0
+```
+
+`sgd` has no state, so it works on a `float` as well — a bias, say — and then
+it evaluates to the new value, which is all a scalar needs:
+
+```duck
+let b = 1.0;
+let gb = 0.25;
+b = sgd(b, gb, 0.01);       // 0.9975
+```
+
+A struct parameter is updated leaf by leaf, which is what the reference
+semantics buy you: the call reaches the block the struct already holds.
+
+```duck
+struct Params { w: tensor[2, 3], b: float }
+
+fn train_step(p: Params, g: Params, lr: float) {
+    sgd(p.w, g.w, lr);
+    p.b = sgd(p.b, g.b, lr);
+}
+```
+
+---
+
+## 17. Errors and diagnostics
 
 Errors carry the file, line and column, the offending source line and a caret:
 
@@ -747,6 +815,10 @@ Nothing is written when compilation fails. A few classes worth knowing:
 | a non-constant dimension | `tensor dimension 'n' must be a compile-time integer constant` |
 | `grad(f, x)` on a body with an `if` | `grad() cannot differentiate 'f': only 'let' statements and a final 'send' are supported (found 'if')` |
 | `grad(f, x)` calling another function | `grad() cannot differentiate 'f': the call to 'g()' is not a builtin` |
+| `sgd(w, g)` with the wrong arity | `sgd() expects exactly 3 arguments, found 2 - as in sgd(w, g, lr)` |
+| `sgd(w, g, 1)` | `sgd() expects the learning rate as a 'float', found 'int' - as in sgd(w, g, 0.01)` |
+| `sgd(w, h, lr)` with `h` a different shape | `sgd() expects the gradient to have the parameter's type, found 'tensor[3]' for 'tensor[2]'` |
+| `momentum(b, ...)` on a `float` | `momentum() needs a tensor: it keeps state, and a 'float' argument would only carry a copy of it. For a scalar parameter write `x = x - lr * g` by hand` |
 | index past the end | run time: `ducky: index out of bounds`, exit `127` |
 
 **Redefinition.** A handful of names are reserved and cannot be declared:
@@ -756,13 +828,15 @@ family and `tensor`, plus — since differentiation — `grad`, `step`,
 builtins, but the gradient code the compiler emits names them, so a program
 defining its own would silently change what `grad` produces. Everything else
 in the builtin surface is an ordinary name — a program may define its own
-`sum`, `rand`, `max`, `min` or `shape`, and **the user's definition wins** at
-every call site. That is what keeps programs written before v0.8.0 compiling
-unchanged.
+`sum`, `rand`, `max`, `min`, `shape` or `sgd`, and **the user's definition
+wins** at every call site. That is what keeps programs written before v0.8.0
+compiling unchanged. The optimizers are in that group too: nothing generated
+calls `sgd`, `momentum` or `adam`, so they only differ from `sum` in taking
+their arguments seriously.
 
 ---
 
-## 17. The output of a program
+## 18. The output of a program
 
 `serve` writes through raw `write` syscalls, unbuffered, one value per line:
 
@@ -822,9 +896,11 @@ The process exit status is `main`'s return value.
 * [SPEC.md](SPEC.md) — the formal grammar, the full builtin table, the
   precedence table and every diagnostic class.
 * [ROADMAP.md](ROADMAP.md) — what has landed and what comes next:
-  optimizers, model files, sockets and HTTP, and the transformer blocks on
-  top of the primitives here.
+  model files, sockets and HTTP, and the transformer blocks on top of the
+  primitives here.
 * [examples/tensors.duck](examples/tensors.duck) — everything in §13 and §14
   in one runnable file.
 * [examples/grad.duck](examples/grad.duck) — every shape of §15 in one
   runnable file.
+* [tests/cases/opt.duck](tests/cases/opt.duck) — §16 step for step, every
+  number worked out in a comment.

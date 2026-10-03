@@ -884,6 +884,48 @@ static void gen_call(Expr *e) {
             break;
         }
 
+        case BUILTIN_SGD:
+        case BUILTIN_MOMENTUM:
+        case BUILTIN_ADAM: {
+            /* The arguments go onto the machine stack in source order and are
+             * then popped straight into their ABI registers, which is the
+             * reverse order: the top of the stack is the last one pushed, so
+             * it lands in the highest-numbered register. Floats travel as bit
+             * patterns in integer registers, the way every other ducky_
+             * routine takes them, and the step count is a plain int. */
+            int nargs = e->call.nargs;
+            for (int i = 0; i < nargs - 1; i++) {
+                gen_expr(e->call.args[i]);
+                push_rax();
+            }
+            gen_expr(e->call.args[nargs - 1]); /* lr / beta / t, left in %rax */
+            if (e->call.builtin == BUILTIN_SGD && nargs == 3 &&
+                e->call.args[0]->type == TY_FLOAT) {
+                /* A scalar step has no state to keep and no block to write:
+                 * it is one expression, and nothing is allocated. */
+                emit("    movq %%rax, %%xmm2\n");          /* lr        */
+                emit("    pop %%rsi\n");                   /* g         */
+                depth--;
+                emit("    pop %%rdi\n");                   /* x         */
+                depth--;
+                emit("    movq %%rdi, %%xmm0\n");
+                emit("    movq %%rsi, %%xmm1\n");
+                emit("    mulsd %%xmm2, %%xmm1\n");        /* lr * g    */
+                emit("    subsd %%xmm1, %%xmm0\n");        /* x - lr*g  */
+                emit("    movq %%xmm0, %%rax\n");
+                break;
+            }
+            emit("    mov %%rax, %%%s\n", arg_regs[nargs - 1]);
+            for (int i = nargs - 2; i >= 0; i--) {
+                emit("    pop %%%s\n", arg_regs[i]);
+                depth--;
+            }
+            emit_call(e->call.builtin == BUILTIN_SGD        ? "ducky_sgd"
+                      : e->call.builtin == BUILTIN_MOMENTUM ? "ducky_momentum"
+                                                            : "ducky_adam");
+            break;
+        }
+
         case BUILTIN_NONE:
             break; /* unreachable (guarded above) */
         }
@@ -3403,6 +3445,149 @@ static void emit_tensor_runtime(void) {
         "    pop %rbx\n"
         "    ret\n");
 
+    /* Optimizers. One pass over (parameter, gradient) that writes the update
+     * into the parameter itself, so a training step allocates nothing -
+     * which is the point: `x = x - lr * g` builds a fresh block every step
+     * and nothing ever reclaims the old ones. Each reads the element count
+     * from the parameter's own header (every tensor value is a block whose
+     * first word is its length) and returns the parameter, so the call works
+     * as a statement or as an assignment. None of them calls anything, so
+     * every register they use is a caller-saved one and none has to be
+     * pushed; the float arguments arrive as bit patterns in integer
+     * registers and are moved into xmm for the arithmetic. */
+    emit_verbatim(
+        "\nducky_sgd:\n"
+        "    movq %rdx, %xmm0\n"                  /* lr                */
+        "    mov (%rdi), %rdx\n"                  /* n                 */
+        "    lea 8(%rdi), %rax\n"                 /* x cursor          */
+        "    lea 8(%rsi), %rcx\n"                 /* g cursor          */
+        "    test %rdx, %rdx\n"
+        "    jz .Lsgd_done\n"
+        ".Lsgd_loop:\n"
+        "    movsd (%rcx), %xmm1\n"
+        "    mulsd %xmm0, %xmm1\n"                /* lr * g            */
+        "    movsd (%rax), %xmm2\n"               /* x                 */
+        "    subsd %xmm1, %xmm2\n"                /* x - lr*g          */
+        "    movsd %xmm2, (%rax)\n"               /* x := ...          */
+        "    add $8, %rax\n"
+        "    add $8, %rcx\n"
+        "    dec %rdx\n"
+        "    jnz .Lsgd_loop\n"
+        ".Lsgd_done:\n"
+        "    mov %rdi, %rax\n"
+        "    ret\n"
+
+        /* momentum: v := beta*v + g, then x -= lr*v. The new v is computed
+         * once and used for both stores, so x and v cannot disagree. */
+        "\nducky_momentum:\n"
+        "    movq %rdx, %xmm0\n"                  /* lr                */
+        "    movq %r8, %xmm1\n"                   /* beta              */
+        "    mov (%rdi), %rdx\n"                  /* n                 */
+        "    lea 8(%rdi), %rax\n"                 /* x cursor          */
+        "    lea 8(%rsi), %r10\n"                 /* g cursor          */
+        "    lea 8(%rcx), %r11\n"                 /* v cursor          */
+        "    test %rdx, %rdx\n"
+        "    jz .Lmom_done\n"
+        ".Lmom_loop:\n"
+        "    movsd (%r11), %xmm2\n"               /* v                 */
+        "    mulsd %xmm1, %xmm2\n"                /* beta * v          */
+        "    addsd (%r10), %xmm2\n"               /* + g               */
+        "    movsd %xmm2, (%r11)\n"               /* v := ...          */
+        "    mulsd %xmm0, %xmm2\n"                /* lr * v            */
+        "    movsd (%rax), %xmm4\n"               /* x                 */
+        "    subsd %xmm2, %xmm4\n"                /* x - lr*v          */
+        "    movsd %xmm4, (%rax)\n"               /* x := ...          */
+        "    add $8, %rax\n"
+        "    add $8, %r10\n"
+        "    add $8, %r11\n"
+        "    dec %rdx\n"
+        "    jnz .Lmom_loop\n"
+        ".Lmom_done:\n"
+        "    mov %rdi, %rax\n"
+        "    ret\n"
+
+        /* adam with bias correction:
+         *   m := .9m + .1g      v := .999v + .001 g^2
+         *   m^ = m/(1-.9^k)     v^ = v/(1-.999^k)     k = t+1
+         *   x -= lr * m^ / (sqrt(v^) + 1e-8)
+         * The two powers are found by squaring - sixty-odd multiplications
+         * however long the run - rather than by looping k times, which would
+         * make a step cost O(t) forever. Registers: xmm3 lr, xmm5/xmm6 the
+         * two correction factors, xmm7/xmm8 (1-beta), xmm9 eps. */
+        "\nducky_adam:\n"
+        "    movq %rdx, %xmm3\n"                  /* lr                */
+        "    mov %rcx, %r11\n"                    /* m                 */
+        "    mov %r8, %rcx\n"                     /* v                 */
+        "    lea 8(%rdi), %rax\n"                 /* x cursor          */
+        "    lea 8(%rsi), %r10\n"                 /* g cursor          */
+        "    lea 8(%r11), %r11\n"                 /* m cursor          */
+        "    lea 8(%rcx), %rcx\n"                 /* v cursor          */
+        "    mov (%rdi), %rdx\n"                  /* n                 */
+        "    inc %r9\n"                           /* k = t + 1         */
+        "    cmp $1, %r9\n"
+        "    jge .Lad_kok\n"
+        "    mov $1, %r9\n"                       /* t starts at 0     */
+        ".Lad_kok:\n"
+        "    movsd .Lad_b1(%rip), %xmm0\n"
+        "    movsd .Lad_b2(%rip), %xmm1\n"
+        "    movsd .Ltf_one(%rip), %xmm2\n"       /* b1^k              */
+        "    movsd .Ltf_one(%rip), %xmm4\n"       /* b2^k              */
+        ".Lad_pow:\n"
+        "    test %r9, %r9\n"
+        "    jz .Lad_pow_d\n"
+        "    test $1, %r9b\n"
+        "    jz .Lad_sq\n"
+        "    mulsd %xmm0, %xmm2\n"
+        "    mulsd %xmm1, %xmm4\n"
+        ".Lad_sq:\n"
+        "    mulsd %xmm0, %xmm0\n"
+        "    mulsd %xmm1, %xmm1\n"
+        "    sar $1, %r9\n"
+        "    jmp .Lad_pow\n"
+        ".Lad_pow_d:\n"
+        "    movsd .Ltf_one(%rip), %xmm5\n"
+        "    subsd %xmm2, %xmm5\n"                /* 1 - b1^k          */
+        "    movsd .Ltf_one(%rip), %xmm6\n"
+        "    subsd %xmm4, %xmm6\n"                /* 1 - b2^k          */
+        "    movsd .Lad_w1(%rip), %xmm7\n"        /* 1 - b1            */
+        "    movsd .Lad_w2(%rip), %xmm8\n"        /* 1 - b2            */
+        "    movsd .Lad_eps(%rip), %xmm9\n"
+        "    test %rdx, %rdx\n"
+        "    jz .Lad_done\n"
+        ".Lad_loop:\n"
+        "    movsd (%r10), %xmm0\n"               /* g                 */
+        "    movsd (%r11), %xmm1\n"               /* m                 */
+        "    movsd (%rcx), %xmm2\n"               /* v                 */
+        "    movapd %xmm0, %xmm10\n"
+        "    subsd %xmm1, %xmm10\n"               /* g - m             */
+        "    mulsd %xmm7, %xmm10\n"               /* (1-b1)(g - m)     */
+        "    addsd %xmm1, %xmm10\n"               /* m := ...          */
+        "    movsd %xmm10, (%r11)\n"
+        "    movapd %xmm0, %xmm11\n"
+        "    mulsd %xmm0, %xmm11\n"               /* g^2               */
+        "    subsd %xmm2, %xmm11\n"               /* g^2 - v           */
+        "    mulsd %xmm8, %xmm11\n"               /* (1-b2)(g^2 - v)   */
+        "    addsd %xmm2, %xmm11\n"               /* v := ...          */
+        "    movsd %xmm11, (%rcx)\n"
+        "    divsd %xmm5, %xmm10\n"               /* m^                */
+        "    divsd %xmm6, %xmm11\n"               /* v^                */
+        "    addsd %xmm9, %xmm11\n"               /* + eps             */
+        "    sqrtsd %xmm11, %xmm11\n"
+        "    divsd %xmm11, %xmm10\n"              /* m^ / sqrt(v^+e)   */
+        "    mulsd %xmm3, %xmm10\n"               /* * lr              */
+        "    movsd (%rax), %xmm12\n"              /* x                 */
+        "    subsd %xmm10, %xmm12\n"              /* x - update        */
+        "    movsd %xmm12, (%rax)\n"              /* x := ...          */
+        "    add $8, %rax\n"
+        "    add $8, %r10\n"
+        "    add $8, %r11\n"
+        "    add $8, %rcx\n"
+        "    dec %rdx\n"
+        "    jnz .Lad_loop\n"
+        ".Lad_done:\n"
+        "    mov %rdi, %rax\n"
+        "    ret\n");
+
     /* Activations. gelu keeps x in r13 across its call to tanh1 - the loop
      * registers are the callee-saved ones precisely so a body can call. */
     emit_tensor_map("ducky_relu", "xorpd %xmm1, %xmm1", "maxsd %xmm1, %xmm0");
@@ -3879,6 +4064,17 @@ static void emit_tensor_rodata(void) {
     emit(".Ltf_ln2lo:\n    .quad 0x%016llx\n", f64_bits(1.90821492927058770002e-10));
     emit(".Ltf_geluk:\n    .quad 0x%016llx\n", f64_bits(0.044715));
     emit(".Ltf_geluc:\n    .quad 0x%016llx\n", f64_bits(0.79788456080286535588));
+
+    /* The optimizer constants: the two momenta, their complements (the
+     * weights the running averages are updated with, written out rather
+     * than subtracted so that `m += 0.1*(g - m)` uses the exact 0.1 the
+     * textbook says and not the double nearest to 1 - 0.9), and Adam's
+     * denominator floor. */
+    emit(".Lad_b1:\n    .quad 0x%016llx\n", f64_bits(0.9));
+    emit(".Lad_b2:\n    .quad 0x%016llx\n", f64_bits(0.999));
+    emit(".Lad_w1:\n    .quad 0x%016llx\n", f64_bits(0.1));
+    emit(".Lad_w2:\n    .quad 0x%016llx\n", f64_bits(0.001));
+    emit(".Lad_eps:\n    .quad 0x%016llx\n", f64_bits(1e-8));
 
     /* 1/n! for n = 0..20: exp's series. The loop counts down from the last
      * entry, so the Horner evaluation reads them straight off the front. */

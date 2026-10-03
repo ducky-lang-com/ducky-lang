@@ -147,7 +147,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.duck",
-          "match": "\\b(serve|len|str|input_line|push|scan_int|scan_float|scan_int_line|scan_float_line|tensor|zeros|ones|rand|seed|shape|grad|step|matmul_tn|matmul_nt|matmul|dot|relu|sigmoid|tanh|gelu|softmax|sum|mean|max|min|argmax|mse|cross_entropy_grad|cross_entropy)(?=\\s*\\()"
+          "match": "\\b(serve|len|str|input_line|push|scan_int|scan_float|scan_int_line|scan_float_line|tensor|zeros|ones|rand|seed|shape|grad|step|matmul_tn|matmul_nt|matmul|sgd|momentum|adam|dot|relu|sigmoid|tanh|gelu|softmax|sum|mean|max|min|argmax|mse|cross_entropy_grad|cross_entropy)(?=\\s*\\()"
         }
       ]
     },

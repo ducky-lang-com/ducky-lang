@@ -1,0 +1,7 @@
+// The gradient has to be the parameter's type, shape included.
+fn main() -> int {
+    let w: tensor[2] = zeros([2]);
+    let g: tensor[3] = zeros([3]);
+    sgd(w, g, 0.1);
+    send 0;
+}

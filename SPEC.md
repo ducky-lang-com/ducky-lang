@@ -724,16 +724,39 @@ whose type cannot carry a gradient at all (`int`, `bool`, `string`,
 `grad(f, …)` sites share one `f$grad`; `f` defined in terms of
 `grad(f, …)` is rejected instead of unrolled.
 
+#### Optimizer builtins (v0.9.0)
+
+| Call | Result | Description |
+|---|---|---|
+| `sgd(x, g, lr)` | `x`'s type | `x := x − lr·g`, written into `x` itself; evaluates to `x`. On a `float` there is nothing to write into, so it evaluates to `x − lr·g`. |
+| `momentum(x, g, lr, v, beta)` | tensor | `v := beta·v + g`, then `x := x − lr·v`; evaluates to `x`. |
+| `adam(x, g, lr, m, v, t)` | tensor | `m := .9m + .1g`, `v := .999v + .001g²`, then `x := x − lr·m̂/(√v̂ + 1e-8)` where `m̂ = m/(1−.9ᵏ)`, `v̂ = v/(1−.999ᵏ)` and `k = t+1`; evaluates to `x`. |
+
+`g` must have the same type as `x` — the same shape when it is a tensor —
+and `lr` and `beta` are `float`. `t` is the number of updates already made
+and starts at 0, so the caller owns the counter. The state tensors have `x`'s
+shape, are zeroed by the caller and are written in place; that is why
+`momentum` and `adam` accept only tensors, since a `float` argument would be
+a copy and the state would go nowhere.
+
+All three update `x` **in place** and do not allocate: a step costs nothing
+but the arithmetic, and the parameter keeps its address from the first step to
+the last. `x = x - lr * g` is not the same expression — it builds a fresh
+result block on every step.
+
+Being ordinary names (§9), a user definition of `sgd`, `momentum` or `adam`
+shadows them exactly as a definition of `sum` shadows that builtin.
+
 `str` returns a fresh string on the heap (except the constant `true`/`false`,
 which points at static memory), so it can be concatenated freely.
 
 The names in §9 — `serve`, `len`, `str`, `input_line`, `float`, `int`, `push`,
 the `scan_*` family, `tensor`, `grad`, `step`, `matmul_tn`, `matmul_nt` and
 `cross_entropy_grad` — are reserved and cannot be redefined. Every other
-builtin, including all the other tensor builtins above, is a plain name that
-**user code may shadow**: a function declared as `sum` or `rand` takes
-precedence over the builtin of the same name at every call site, which is what
-lets programs written before v0.8.0 keep compiling.
+builtin, including all the other tensor builtins and the optimizers above, is
+a plain name that **user code may shadow**: a function declared as `sum`,
+`rand` or `sgd` takes precedence over the builtin of the same name at every
+call site, which is what lets programs written before v0.8.0 keep compiling.
 
 ---
 
@@ -819,7 +842,9 @@ function is a semantic rule, not a grammatical one.
   of §7 — is shadowable by a user definition of the same name. The four
   added names are the exception because `grad` is a special form and the
   other three are named by the gradient code the compiler emits for it: a
-  user definition of `step` would change what `grad` computes.
+  user definition of `step` would change what `grad` computes. The
+  optimizers `sgd`, `momentum` and `adam` are deliberately **not** in this
+  list: no generated code calls them, so they shadow like `sum` does.
 * Function, constant, struct and field names starting with `_`.
 * Function, constant, struct and field names starting with `ducky_` (the
   generated runtime owns `ducky_serve_int`, `ducky_serve_bool`, `ducky_serve_str`,
@@ -836,7 +861,10 @@ function is a semantic rule, not a grammatical one.
   `ducky_trand`, `ducky_rngstate` and the rest of that
   family; they are emitted only for programs that use tensors (§3.3).
   Differentiation adds `ducky_step`, `ducky_matmul_tn`, `ducky_matmul_nt`
-  and `ducky_xent_grad` to that family, on the same condition.
+  and `ducky_xent_grad` to that family, on the same condition; so does the
+  optimizer trio `ducky_sgd`, `ducky_momentum` and `ducky_adam`. A scalar
+  `sgd` has no runtime routine at all — it is one expression — so a program
+  with no tensor anywhere still emits none of them.
 * Function and struct names may not collide with each other or with a
   constant; field names live in their own namespace (accessed through `.`).
 
