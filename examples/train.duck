@@ -1,0 +1,93 @@
+// train.duck - a two-layer network trained end to end on XOR.
+//
+// Forward pass, autodiff, Adam, loss curve: every piece of it is Ducky, and
+// the whole thing links to no libc and no libm.
+
+struct Params {
+    w1: tensor[4, 2],   // 4 hidden units, each over the 2 inputs
+    b1: tensor[4],
+    w2: tensor[1, 4],   // 1 output, over the 4 hidden units
+    b2: tensor[1]
+}
+
+// Adam's two running averages: one block per parameter, allocated once,
+// written in place on every step. The same struct shape as the parameters,
+// so the two nest together as the leaves of a struct.
+struct State {
+    w1: tensor[4, 2],
+    b1: tensor[4],
+    w2: tensor[1, 4],
+    b2: tensor[1]
+}
+
+// The four points of XOR as one mean squared error.
+//
+// This is the function `grad` differentiates, and its body may only be `let`
+// statements and a final `send`: no helper call, no branching, and every
+// value whose gradient has somewhere to go bound to a name - which is why
+// each point is written out instead of folded into a batch. Ducky has no
+// broadcasting, so the bias is added per point as well.
+fn loss(p: Params) -> float {
+    let h0 = tanh(matmul(p.w1, tensor([2], [0.0, 0.0])) + p.b1);
+    let y0 = sigmoid(matmul(p.w2, h0) + p.b2);
+    let e0 = y0[0] - 0.0;               // 0 0 -> 0
+
+    let h1 = tanh(matmul(p.w1, tensor([2], [0.0, 1.0])) + p.b1);
+    let y1 = sigmoid(matmul(p.w2, h1) + p.b2);
+    let e1 = y1[0] - 1.0;               // 0 1 -> 1
+
+    let h2 = tanh(matmul(p.w1, tensor([2], [1.0, 0.0])) + p.b1);
+    let y2 = sigmoid(matmul(p.w2, h2) + p.b2);
+    let e2 = y2[0] - 1.0;               // 1 0 -> 1
+
+    let h3 = tanh(matmul(p.w1, tensor([2], [1.0, 1.0])) + p.b1);
+    let y3 = sigmoid(matmul(p.w2, h3) + p.b2);
+    let e3 = y3[0] - 0.0;               // 1 1 -> 0
+
+    send (e0 * e0 + e1 * e1 + e2 * e2 + e3 * e3) * 0.25;
+}
+
+// The same forward pass on a single point, for reading the answer once the
+// training is done. It is never differentiated, so it may be written the
+// convenient way.
+fn pred(p: Params, x0: float, x1: float) -> float {
+    let h = tanh(matmul(p.w1, tensor([2], [x0, x1])) + p.b1);
+    send sigmoid(matmul(p.w2, h) + p.b2)[0];
+}
+
+fn show(label: string, want: float, got: float) {
+    serve(label + "   want " + str(want) + "   got " + str(got));
+}
+
+fn main() -> int {
+    // An asymmetric start: hidden units that begin identical stay identical
+    // all the way down, and a row of identical units cannot read XOR.
+    seed(7);
+    let p = Params((rand([4, 2]) - 0.5) * 0.6, zeros([4]),
+                   (rand([1, 4]) - 0.5) * 0.6, zeros([1]));
+    let g = grad(loss, p);
+    let m = State(zeros([4, 2]), zeros([4]), zeros([1, 4]), zeros([1]));
+    let v = State(zeros([4, 2]), zeros([4]), zeros([1, 4]), zeros([1]));
+    let lr = 0.05;
+    let t = 0;
+
+    serve("step 0     loss " + str(loss(p)));
+    for i in 1..1500 {
+        g = grad(loss, p);
+        adam(p.w1, g.w1, lr, m.w1, v.w1, t);
+        adam(p.b1, g.b1, lr, m.b1, v.b1, t);
+        adam(p.w2, g.w2, lr, m.w2, v.w2, t);
+        adam(p.b2, g.b2, lr, m.b2, v.b2, t);
+        t = t + 1;
+        if i % 300 == 0 {
+            serve("step " + str(i) + "   loss " + str(loss(p)));
+        }
+    }
+
+    serve("");
+    show("0 0", 0.0, pred(p, 0.0, 0.0));
+    show("0 1", 1.0, pred(p, 0.0, 1.0));
+    show("1 0", 1.0, pred(p, 1.0, 0.0));
+    show("1 1", 0.0, pred(p, 1.0, 1.0));
+    send 0;
+}

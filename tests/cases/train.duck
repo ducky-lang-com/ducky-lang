@@ -1,0 +1,73 @@
+// train.duck - the whole loop at once: a hidden layer, autodiff through
+// it, Adam on four parameters, and the answer on the right side of 0.5.
+//
+// Only the conclusions are printed. The exact numbers depend on the PRNG,
+// on exp/log and on the rounding of every step, so they would make a brittle
+// test; what has to hold is that the loss comes down and that the four
+// points land where XOR says they should. A gradient that silently came out
+// zero - which is what this guards against - would leave the loss pinned and
+// every prediction at 0.5.
+
+struct Params {
+    w1: tensor[4, 2],
+    b1: tensor[4],
+    w2: tensor[1, 4],
+    b2: tensor[1]
+}
+
+struct State {
+    w1: tensor[4, 2],
+    b1: tensor[4],
+    w2: tensor[1, 4],
+    b2: tensor[1]
+}
+
+// Written out point by point: a differentiable body may not call a helper,
+// and Ducky has no broadcasting to fold the bias in with.
+fn loss(p: Params) -> float {
+    let h0 = tanh(matmul(p.w1, tensor([2], [0.0, 0.0])) + p.b1);
+    let y0 = sigmoid(matmul(p.w2, h0) + p.b2);
+    let e0 = y0[0] - 0.0;
+    let h1 = tanh(matmul(p.w1, tensor([2], [0.0, 1.0])) + p.b1);
+    let y1 = sigmoid(matmul(p.w2, h1) + p.b2);
+    let e1 = y1[0] - 1.0;
+    let h2 = tanh(matmul(p.w1, tensor([2], [1.0, 0.0])) + p.b1);
+    let y2 = sigmoid(matmul(p.w2, h2) + p.b2);
+    let e2 = y2[0] - 1.0;
+    let h3 = tanh(matmul(p.w1, tensor([2], [1.0, 1.0])) + p.b1);
+    let y3 = sigmoid(matmul(p.w2, h3) + p.b2);
+    let e3 = y3[0] - 0.0;
+    send (e0 * e0 + e1 * e1 + e2 * e2 + e3 * e3) * 0.25;
+}
+
+fn pred(p: Params, x0: float, x1: float) -> float {
+    let h = tanh(matmul(p.w1, tensor([2], [x0, x1])) + p.b1);
+    send sigmoid(matmul(p.w2, h) + p.b2)[0];
+}
+
+fn main() -> int {
+    seed(7);
+    let p = Params((rand([4, 2]) - 0.5) * 0.6, zeros([4]),
+                   (rand([1, 4]) - 0.5) * 0.6, zeros([1]));
+    let g = grad(loss, p);
+    let m = State(zeros([4, 2]), zeros([4]), zeros([1, 4]), zeros([1]));
+    let v = State(zeros([4, 2]), zeros([4]), zeros([1, 4]), zeros([1]));
+    let first = loss(p);
+    let t = 0;
+
+    for i in 0..600 {
+        g = grad(loss, p);
+        adam(p.w1, g.w1, 0.05, m.w1, v.w1, t);
+        adam(p.b1, g.b1, 0.05, m.b1, v.b1, t);
+        adam(p.w2, g.w2, 0.05, m.w2, v.w2, t);
+        adam(p.b2, g.b2, 0.05, m.b2, v.b2, t);
+        t = t + 1;
+    }
+
+    serve(loss(p) < first);            // the fit improved
+    serve(pred(p, 0.0, 0.0) < 0.5);    // 0 0 -> 0
+    serve(pred(p, 0.0, 1.0) > 0.5);    // 0 1 -> 1
+    serve(pred(p, 1.0, 0.0) > 0.5);    // 1 0 -> 1
+    serve(pred(p, 1.0, 1.0) < 0.5);    // 1 1 -> 0
+    send 0;
+}

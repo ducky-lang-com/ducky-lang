@@ -1816,6 +1816,21 @@ static int has_diff_leaf(Expr *e) {
     }
 }
 
+/* There is a gradient below `e` but nothing that could receive it: the value
+ * was computed on the spot rather than bound to a name, so it has no
+ * `g$...` to add a contribution to. This is the one silent hole the reverse
+ * pass would otherwise have - `sigmoid(p.w)[0]` would quietly differentiate
+ * to zero, which is worse than any error. Called only where a `has_diff_leaf`
+ * subtree has run out of names; a constant reaching the same place is
+ * correct as it is. */
+static void grad_unnamed(Expr *e, const void *at) {
+    if (!has_diff_leaf(e)) return;
+    err_here(at, "grad() cannot differentiate a value that is computed but "
+                 "never named: there is no gradient variable to add its "
+                 "contribution to, so it would be lost. Bind it to a 'let' "
+                 "first");
+}
+
 /* The expression that names the gradient of a leaf-valued expression: the
  * local `g$...`, or a subscript of it when the expression is an element or a
  * slice of a tensor. NULL when nothing below it can receive a gradient (a
@@ -1835,7 +1850,10 @@ static Expr *grad_target(Expr *e, const void *at) {
             chain[n++] = cur;
             cur = cur->field.obj;
         }
-        if (!cur || cur->kind != EX_VAR) return NULL;
+        if (!cur || cur->kind != EX_VAR) {
+            grad_unnamed(e, at);
+            return NULL;
+        }
         const char *path = "";
         for (int i = n - 1; i >= 0; i--)
             path = path[0] ? path_join(path, chain[i]->field.name)
@@ -1851,7 +1869,9 @@ static Expr *grad_target(Expr *e, const void *at) {
         if (!base) return NULL;
         return g_index(base, copy_expr(e->index.idx), at);
     }
-    default: return NULL;
+    default:
+        grad_unnamed(e, at);
+        return NULL;
     }
 }
 
@@ -1908,6 +1928,7 @@ static void rev_struct(Expr *e, const SItem *items, int n, GList *out) {
         return;
     }
     /* Anything else has no structure to descend into. */
+    grad_unnamed(e, e);
 }
 
 static void rev_at(Expr *e, const char *path, Expr *g, GList *out) {

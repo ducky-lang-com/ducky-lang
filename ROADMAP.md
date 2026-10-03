@@ -146,7 +146,11 @@ reach the block the struct already holds. Alongside it the three optimizers —
 `sgd`, `momentum` and `adam` — apply one update **in place** and evaluate to
 the parameter they updated, so a training step allocates nothing where
 `w = w - lr * g` would allocate a new parameter block every step and never
-reclaim it. The suite is now **129 tests (32 runtime + 97 error), all
+reclaim it. `examples/train.duck` puts the two together — a two-layer
+network trained end to end on XOR, with the loss curve printed as it goes —
+and `tests/cases/train.duck` holds the same run to its conclusions, so a
+gradient that came out zero fails the suite instead of quietly pinning the
+loss. The suite is now **132 tests (33 runtime + 99 error), all
 passing.**
 
 ## Milestone M2 — Engineering
@@ -213,8 +217,8 @@ runs on a bare machine.
 |---|---|---|
 | Y1 | Reverse-mode automatic differentiation over tensors | **done** — `grad(f, x)`, a compile-time special form that synthesizes an ordinary `f$grad`. No tape: `f`'s body must be `let` statements plus a final `send`, and the backward pass is built out of ordinary statements the type checker runs over. Works on `float`, tensors and structs of those; see USAGE §15 |
 | Y2 | Optimizers: SGD (with momentum), Adam | **done** — `sgd(x, g, lr)`, `momentum(x, g, lr, v, beta)` and `adam(x, g, lr, m, v, t)`, each writing its update **into the parameter** and evaluating to it, so a step allocates nothing and the parameter keeps its address for the whole run — which `w = w - lr * g` cannot say, since that expression builds a fresh block every step. `sgd` also takes a `float` (a bias) and then evaluates to the new value; the other two keep running averages and so need a tensor to keep them in. Adam's bias correction is found by squaring, not by looping `t` times. See USAGE §16 |
-| Y3 | A `Layer`/`Module` vocabulary: dense layers, chains, forward pass | structs plus functions, no new syntax if it can be avoided |
-| Y4 | Training loop on a small dataset, with a printed loss curve | the proof that Y1–Y3 work end to end |
+| Y3 | A `Layer`/`Module` vocabulary: dense layers, chains, forward pass | structs plus functions, no new syntax if it can be avoided. **Held up by `grad`, deliberately**: a differentiable body may not call another function, so a `dense(l, x)` helper cannot be used inside `loss` — the forward pass has to be written out there. The vocabulary is still worth having for the inference side, and inlining user calls into `f$grad` would lift the restriction |
+| Y4 | Training loop on a small dataset, with a printed loss curve | **done** — `examples/train.duck`: XOR through a 2→4→1 net with `tanh` and `sigmoid`, Adam on four parameters, the loss printed as it goes (0.25 → 1.3e-5 over 1500 steps, 0.2 s) and the four predictions at the end. The layers are the `Params` struct plus the forward pass written out in `loss`, which is what Y3 asks for minus the vocabulary. `tests/cases/train.duck` runs the same fit for 600 steps and keeps only the conclusions |
 | Y5 | Deterministic data: `rand` reshaping helpers, shuffling, train/test split | builds on `seed(n)` |
 | Y6 | Batched tensors (`tensor[b, n]`) and a `matmul` that stays cache-friendly | current `matmul` is a simple triple loop |
 

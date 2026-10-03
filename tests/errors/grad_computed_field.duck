@@ -1,0 +1,12 @@
+// Same hole one level down: a field of a struct built in the expression
+// rather than bound to a name.
+struct P { w: tensor[2], b: float, c: float }
+
+fn f(p: P) -> float {
+    send (P(p.w, 1.0, p.b)).c;
+}
+
+fn main() -> int {
+    let g = grad(f, P(tensor([2], [1.0, 2.0]), 3.0, 4.0));
+    send 0;
+}

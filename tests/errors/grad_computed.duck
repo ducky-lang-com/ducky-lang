@@ -1,0 +1,12 @@
+// The value being subscripted is computed on the spot, so it has no
+// `g$...` to receive a gradient into - bind it first.
+struct P { w: tensor[2], b: float }
+
+fn f(p: P) -> float {
+    send sigmoid(p.w)[0] + p.b;
+}
+
+fn main() -> int {
+    let g = grad(f, P(tensor([2], [1.0, 2.0]), 3.0));
+    send 0;
+}

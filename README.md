@@ -273,7 +273,7 @@ x86-64.
 
 ```sh
 make          # builds ./duckyc
-make test     # runs the test suite (129 tests)
+make test     # runs the test suite (132 tests)
 make examples # builds every examples/*.duck into build/
 make clean
 ```

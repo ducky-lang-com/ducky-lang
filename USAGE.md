@@ -35,7 +35,7 @@ installing.
 ```sh
 # from a checkout
 make
-make test          # 129 tests
+make test          # 132 tests
 
 # or install it system-wide (and the editor extension)
 curl -fsSL https://raw.githubusercontent.com/ducky-lang-com/ducky-lang/main/install.sh | sh
@@ -720,6 +720,13 @@ with no gradient in it (`shape(t)`, `argmax(t)`, `int`, `bool`). A call that
 *could* carry a gradient and has no rule yet — `softmax`, `max`, `min` — is
 rejected with a message naming it rather than silently returning zero.
 
+The same discipline governs where a gradient is *written*: every value that
+carries one has to be **bound to a name**. `y[0]` is fine once `y` is a
+`let`, but `sigmoid(p.w)[0]` is a subscript of a value that exists only for
+the moment, and there is no gradient variable its contribution could be added
+to. Silently dropping it would be a wrong answer dressed up as a correct one,
+so it is a compile error that asks for the `let`.
+
 Two `grad(f, …)` sites in the same program share one `f$grad`. Defining `f`
 in terms of `grad(f, …)` is rejected rather than unrolled.
 
@@ -790,6 +797,10 @@ fn train_step(p: Params, g: Params, lr: float) {
 }
 ```
 
+Put together — a gradient, a step and a loss curve — these are the whole of
+a training loop, and [examples/train.duck](examples/train.duck) is one
+running: a two-layer network learns XOR, printing the loss as it goes.
+
 ---
 
 ## 17. Errors and diagnostics
@@ -815,6 +826,7 @@ Nothing is written when compilation fails. A few classes worth knowing:
 | a non-constant dimension | `tensor dimension 'n' must be a compile-time integer constant` |
 | `grad(f, x)` on a body with an `if` | `grad() cannot differentiate 'f': only 'let' statements and a final 'send' are supported (found 'if')` |
 | `grad(f, x)` calling another function | `grad() cannot differentiate 'f': the call to 'g()' is not a builtin` |
+| `send sigmoid(p.w)[0] + p.b` inside `f` | `grad() cannot differentiate a value that is computed but never named: there is no gradient variable to add its contribution to, so it would be lost. Bind it to a 'let' first` |
 | `sgd(w, g)` with the wrong arity | `sgd() expects exactly 3 arguments, found 2 - as in sgd(w, g, lr)` |
 | `sgd(w, g, 1)` | `sgd() expects the learning rate as a 'float', found 'int' - as in sgd(w, g, 0.01)` |
 | `sgd(w, h, lr)` with `h` a different shape | `sgd() expects the gradient to have the parameter's type, found 'tensor[3]' for 'tensor[2]'` |
@@ -902,5 +914,8 @@ The process exit status is `main`'s return value.
   in one runnable file.
 * [examples/grad.duck](examples/grad.duck) — every shape of §15 in one
   runnable file.
+* [examples/train.duck](examples/train.duck) — §15 and §16 together: a
+  two-layer network trained end to end on XOR, with the loss curve printed
+  as it goes.
 * [tests/cases/opt.duck](tests/cases/opt.duck) — §16 step for step, every
   number worked out in a comment.

@@ -720,8 +720,15 @@ indexing and struct fields. `tensor(...)`, `zeros`, `ones`, `rand`, `float`,
 input or a fixed target is simply skipped; the same is true of any binding
 whose type cannot carry a gradient at all (`int`, `bool`, `string`,
 `[int]`). A call that *could* carry a gradient and has no rule — `softmax`,
-`max`, `min` — is an error naming it, not a silent zero. Two
-`grad(f, …)` sites share one `f$grad`; `f` defined in terms of
+`max`, `min` — is an error naming it, not a silent zero.
+
+A value that carries a gradient must also be *named*: subscripting or taking
+a field of an expression computed on the spot — `sigmoid(p.w)[0]`,
+`Params(a, b).c` — is rejected rather than silently differentiated to zero,
+because the contribution would have nowhere to be added. Bind it to a `let`
+first.
+
+Two `grad(f, …)` sites share one `f$grad`; `f` defined in terms of
 `grad(f, …)` is rejected instead of unrolled.
 
 #### Optimizer builtins (v0.9.0)
